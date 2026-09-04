@@ -56,3 +56,37 @@ export const formatPValue = (val) => {
   if (num < 0.0001) return "< 0.0001";
   return num.toFixed(4);
 };
+
+export const getSeverityBadge = (severity) => {
+  switch ((severity || "").toUpperCase()) {
+    case "CRITICAL":
+      return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+    case "HIGH":
+      return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+    case "MEDIUM":
+      return "bg-blue-500/15 text-blue-300 border-blue-500/30";
+    default:
+      return "bg-slate-500/15 text-slate-300 border-slate-500/30";
+  }
+};
+
+export const getStateBadge = (state) => {
+  switch ((state || "").toUpperCase()) {
+    case "RESOLVED":
+      return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+    case "AWAITING_HUMAN_APPROVAL":
+      return "bg-purple-500/15 text-purple-300 border-purple-500/30";
+    case "APPROVAL_REJECTED":
+      return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+    case "ROLLED_BACK":
+      return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+    case "ESCALATED_LOW_CONFIDENCE":
+    case "ESCALATED_LOW_REVENUE":
+    case "ESCALATED_INSUFFICIENT_RECOVERY":
+      return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+    case "DIAGNOSED":
+      return "bg-cyan-500/15 text-cyan-300 border-cyan-500/30";
+    default:
+      return "bg-slate-500/15 text-slate-300 border-slate-500/30";
+  }
+};

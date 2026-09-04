@@ -38,6 +38,12 @@ Roles are enforced at the API boundary in `backend/app/policy.py` using `can_app
 
 ---
 
+## 4. Webhook Security & Replay Protection
+
+1. **Strict Idempotency Keys:** Every incoming webhook payload requires a unique `idempotency_key` or `payment_id`. Webhooks are stored in `webhook_events` with unique constraint enforcement, preventing replay attacks and redundant pipeline processing.
+2. **Payload Boundary Validation:** Ingested payloads are strictly validated against `PaymentWebhookPayload` with Pydantic. Malformed inputs are rejected immediately at the HTTP boundary before database or memory state exposure.
+3. **No Unbounded Automated Execution:** Webhooks default to `auto_recover=False`, guaranteeing that external callers cannot trigger automated financial or routing state changes.
+
 ---
 
 ## 5. Explicit Disablement of Live Money Transactions

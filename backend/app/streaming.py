@@ -93,6 +93,7 @@ def process_transaction_event(
         issuer=issuer,
         payment_method=payment_method,
         card_network=card_network,
+        card_bin=bin_number,
         routing_partner=processor,
         merchant_id=event.get("merchant_id", "m_default"),
         success=is_success,
@@ -109,6 +110,11 @@ def process_transaction_event(
 
     if is_success:
         add_step("ANOMALY_CHECKED", "SKIPPED", "Transaction succeeded; no failure pattern detected.", 1.0)
+        add_step("DIAGNOSED", "SKIPPED", "Payment captured cleanly; causal diagnosis not required.", 1.0)
+        add_step("POLICY_EVALUATED", "SKIPPED", "Policy engine on standby; no failure detected.", 1.0)
+        add_step("ACTION_SELECTED", "SKIPPED", "No mitigation action required for successful transaction.", 1.0)
+        add_step("ACTION_APPLIED", "SKIPPED", "No recovery action required.", 1.0)
+        add_step("OUTCOME_MEASURED", "COMPLETED", f"Transaction {tx.id} finalized successfully.", 1.0)
         return {
             "event_record": event_record,
             "transaction_id": tx.id,
@@ -136,6 +142,11 @@ def process_transaction_event(
 
     if not matching_incident:
         add_step("ANOMALY_CHECKED", "NORMAL", "Segment failure rate remains within baseline threshold (drop < 15pp).", 4.2)
+        add_step("DIAGNOSED", "STANDBY", "Failure within baseline; causal diagnosis not triggered.", 1.0)
+        add_step("POLICY_EVALUATED", "STANDBY", "Policy engine on standby; no incident threshold breached.", 1.0)
+        add_step("ACTION_SELECTED", "STANDBY", "No mitigation action necessary for baseline failure.", 1.0)
+        add_step("ACTION_APPLIED", "STANDBY", "No recovery routing executed.", 1.0)
+        add_step("OUTCOME_MEASURED", "STANDBY", "Baseline telemetry recorded without intervention.", 1.0)
         return {
             "event_record": event_record,
             "transaction_id": tx.id,
@@ -195,7 +206,6 @@ def process_transaction_event(
     # 8. ACTION_APPLIED & 9. OUTCOME_MEASURED
     recovery_result = None
     if auto_recover and policy_status == "SAFE_TO_EXECUTE":
-        add_step("ACTION_APPLIED", "EXECUTING", f"Applying {recommended_action} via MockPaymentProvider / Razorpay Smart Router.", 35.0)
         recovery_result = execute_recovery(
             db,
             matching_incident.id,
@@ -207,6 +217,7 @@ def process_transaction_event(
             add_step("ACTION_APPLIED", "APPLIED", f"Strategy {recommended_action} successfully applied to retry traffic.", 12.0)
             add_step("OUTCOME_MEASURED", "RESOLVED", f"Recovery validated: Rs.{recovered_rev:,.2f} recovered revenue secured.", 18.0)
         else:
+            add_step("ACTION_APPLIED", "FAILED", f"Strategy {recommended_action} execution attempt failed.", 10.0)
             add_step("OUTCOME_MEASURED", recovery_result.get("status", "BLOCKED"), f"Recovery outcome: {recovery_result.get('status')}.", 10.0)
     else:
         if not auto_recover:

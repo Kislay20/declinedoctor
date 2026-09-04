@@ -129,15 +129,56 @@ Provides continuous tamper detection via `GET /api/incidents/{id}/audit/verify`.
 
 ---
 
-## 8. Role-Based Access Control (`app/policy.py`)
+---
 
-Enforces dual control for high-value financial actions:
-- **`ADMIN`** & **`OPERATOR`**: Authorized to approve recoveries exceeding ₹500,000 and trigger rollbacks.
-- **`ANALYST`** & **`VIEWER`**: Read-only access; action requests are blocked at the backend boundary.
+## 9. Real-Time Payment Webhook Ingestion (`app/routes/webhooks.py`)
+
+The platform implements production-grade HTTP webhook ingestion:
+- **Pydantic Validation**: Strict schema enforcement (`PaymentWebhookPayload`) validating `event_id`, `payment_id`, `amount`, `currency`, `status`, `issuer`, `payment_method`, `card_bin`, `decline_code`, and `timestamp`.
+- **Cryptographic Idempotency**: Persists webhook entries into `webhook_events` table indexed by `idempotency_key` and `payment_id`. Repeated payloads return HTTP 200 `DUPLICATE_ACCEPTED` with cached responses, preventing race conditions or duplicate anomaly counting.
+- **Safety Invariant**: Webhook events enter the 9-stage pipeline with `auto_recover=False` strictly enforced. Webhooks **never** bypass policy gates or trigger unbounded automated mitigations.
 
 ---
 
+## 10. Multi-Gateway Routing Intelligence (`app/providers/routing_optimizer.py`)
+
+Transforms simple rerouting into a comprehensive multi-provider scoring optimizer:
+- **Simulated Profiles**: Evaluates `Provider A`, `Provider B`, `Provider C`, and `Razorpay Smart Router` across success rates, P95 latencies, processing fees, availability health, and BIN/issuer affinities.
+- **Composite Scoring Function**:
+  $$\text{Score} = 0.40 \cdot S_{\text{success}} + 0.25 \cdot S_{\text{health}} + 0.15 \cdot S_{\text{latency}} + 0.10 \cdot S_{\text{cost}} + 0.10 \cdot S_{\text{BIN}} - P_{\text{degradation}}$$
+- **Safety Boundary**: Operates in simulation/advisory mode (`LIVE_CALLS_ENABLED = False`). Does not move real funds.
+
 ---
+
+## 11. Deep BIN-Level Intelligence (`app/bin_intelligence.py`)
+
+Expands card-level observability to detect localized card range faults vs issuer-wide collapses:
+- **Metrics Aggregation**: Tracks per-BIN volume, decline ratios, card networks, decline code distributions, and gateway dispersion.
+- **Synthetic 3DS Authentication Failure Signal**: Models 3DS handshake failures per BIN without claiming access to real cardholder networks.
+- **Isolation Diagnostic Verdict**: Formulates definitive isolation findings (e.g. `"Evidence indicates the incident is isolated to BIN 452114 rather than an issuer-wide decline pattern."`), enabling granular retry backoffs or issuer outreach rather than blanket routing switches.
+
+---
+
+## 12. 12-Factor Structured Causal Evidence (`app/diagnosis.py`)
+
+Upgrades diagnostic explainability into an enterprise evidence payload:
+1. `hypothesis`
+2. `confidence`
+3. `evidence_for` (supporting signals)
+4. `evidence_against` (contradicting signals)
+5. `key_statistical_signals` (z-score, p-value, drop_pp, EWMA, CUSUM)
+6. `relevant_segment`
+7. `provider_evidence`
+8. `bin_evidence`
+9. `recommended_action`
+10. `why_appropriate`
+11. `invalidation_criteria`
+12. `uncertainty`
+
+Internal reasoning tokens are strictly filtered out; only validated structured signals and conclusions are exposed to operators.
+
+---
+
 
 ## 10. Production Architecture vs. Current Prototype 🌐
 

@@ -13,6 +13,7 @@ from ..policy import (
     MIN_REVENUE_FOR_AUTO_ACTION,
     MAX_REVENUE_FOR_AUTO_APPROVE,
     ACTION_HYPOTHESIS_MAP,
+    get_dual_control_approval_queue,
 )
 
 router = APIRouter()
@@ -114,35 +115,8 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
     funnel_eligible = eligible_revenue
     funnel_recovered = recovered_rev
 
-    # 6. Approval Queue (Phase 7)
-    awaiting_approval = [
-        inc for inc in all_incidents if inc.state == "AWAITING_HUMAN_APPROVAL"
-    ]
-    approval_queue = []
-    for inc in awaiting_approval:
-        diag = db.query(Diagnosis).filter(Diagnosis.incident_id == inc.id).first()
-        at_risk = _at_risk_revenue(db, inc)
-        prop_action = (
-            ACTION_HYPOTHESIS_MAP.get(diag.hypothesis, "REROUTE")
-            if diag
-            else "REROUTE"
-        )
-        approval_queue.append({
-            "incident_id": inc.id,
-            "segment_issuer": inc.segment_issuer,
-            "segment_payment_method": inc.segment_payment_method,
-            "severity": getattr(inc, "severity", "HIGH"),
-            "revenue_at_risk": round(at_risk, 2),
-            "confidence": diag.confidence if diag else 0.0,
-            "hypothesis": diag.hypothesis if diag else "UNKNOWN",
-            "proposed_action": prop_action,
-            "reason": (
-                f"Revenue at risk (₹{at_risk:,.2f}) exceeds the auto-approval threshold "
-                f"(₹{MAX_REVENUE_FOR_AUTO_APPROVE:,.2f}). Requires authorized human verification."
-            ),
-            "created_at": inc.detected_at.isoformat() if inc.detected_at else None,
-            "allowed_roles": ["ADMIN", "OPERATOR"],
-        })
+    # 6. Authoritative Dual-Control Approval Queue (Phase 7 & Product Spec)
+    approval_queue = get_dual_control_approval_queue(db)
 
     return {
         # Core original fields (backwards compatibility)

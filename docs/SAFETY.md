@@ -69,11 +69,31 @@ If an unauthorized role (`VIEWER` or `ANALYST`) attempts to approve an incident 
 
 ---
 
-## 4. LLM Trust Boundary & Numeric Grounding
+## 5. Webhook Ingestion Safety Guardrails
 
-The AI narrative engine is isolated by strict trust boundaries:
+- **Controlled Ingestion Only:** Webhook events received via `POST /api/webhooks/payment` are routed through the 9-stage pipeline with `auto_recover=False` strictly enforced.
+- **No Direct Financial Execution:** A webhook call can NEVER trigger an automated money movement or financial recovery action directly.
+- **Idempotency Guarantee:** Duplicate events are deduplicated via `webhook_events` table before processing to prevent duplicate alert storms.
+- **Malformed Event Isolation:** Invalid Pydantic payloads are rejected safely with HTTP 422 without contaminating the detection state.
 
-1. **Structured Output Schema:** Pydantic `ActionProposal` enforces schema contracts (`narrative`, `recommended_action`, `reasoning`).
-2. **Action Compatibility:** The proposed action must match the deterministic domain action for the diagnosed hypothesis.
-3. **Numeric Grounding Validation:** The narrative is stripped of timestamps, ISO dates, clock times, durations (e.g. `24-hour`), identifiers, and list numbers. Every remaining numeric token must exist within the evidence payload (percentages, transaction counts, drop values). Unsubstantiated numeric claims trigger immediate rejection.
-4. **Deterministic Fallback:** If the LLM call fails, times out, or violates validation, DeclineDoctor falls back seamlessly to deterministic rule-based explanations without interrupting operations.
+---
+
+## 6. Multi-Gateway Routing Safety (`LIVE_CALLS_ENABLED = False`)
+
+- **Simulation Mode Absolute Invariant:** `LIVE_CALLS_ENABLED` is hardcoded to `False` across all provider adapters and scoring engines.
+- **Advisory Recommendations:** The Provider Optimizer returns ranked recommendations (e.g. `REROUTE -> Provider A`) but cannot bypass policy checks, confidence gates, or dual-control approval ceilings.
+
+---
+
+## 7. Dual-Control Rejection & Terminal Immutability
+
+- **Dual-Control Human Rejection:** Operators and Admins can explicitly reject candidate recovery actions via `POST /api/incidents/{id}/reject`.
+- **Immutable Terminal State:** Rejection transitions the incident to `APPROVAL_REJECTED`. Once an incident enters a terminal state (`RESOLVED`, `ESCALATED_LOW_CONFIDENCE`, `ESCALATED_LOW_REVENUE`, `ESCALATED_INSUFFICIENT_RECOVERY`, `APPROVAL_REJECTED`, `ROLLED_BACK`), it is strictly locked and cannot be reopened or re-executed.
+- **Cryptographic Audit:** All approvals and rejections seal immutable SHA-256 audit records.
+
+---
+
+## 8. Counterfactual Snapshot Freeze Invariance
+
+- **Historical Integrity:** When an incident executes recovery, the counterfactual projection snapshot is frozen. Historical projected values are never recalculated or rewritten post-outcome, preserving clean pre-intervention vs actual post-intervention separation.
+

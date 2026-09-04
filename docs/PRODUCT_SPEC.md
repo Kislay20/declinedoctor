@@ -60,25 +60,27 @@ $$\text{ROI \%} = \frac{\text{Net Recovered Revenue}}{\text{Total Operational Co
            ┌─────────────────┐     │    ┌─────────────────────────┐
            │  ESCALATED_LOW_ │     │    │ AWAITING_HUMAN_APPROVAL │
            │     REVENUE     │     │    └────────────┬────────────┘
-           │   (Terminal)    │     │                 │ (Human clicks approve)
-           └─────────────────┘     │                 ▼
-                                   │           [ APPROVED ]
-                                   \                 /
-                                    ▼               ▼
-                                 ┌────────────────────┐
-                                 │  ACTION_SELECTED   │
-                                 └─────────┬──────────┘
-                                           │
-                                           ▼ (simulate & re-measure)
-                                 [ Improvement >= 5pp? ]
-                                   /                 \
-                          No      /                   \  Yes
-                                 ▼                     ▼
-             ┌─────────────────────────────┐    ┌────────────┐
-             │         ESCALATED_          │    │  RESOLVED  │
-             │    INSUFFICIENT_RECOVERY    │    │ (Terminal) │
-             │          (Terminal)         │    └────────────┘
-             └─────────────────────────────┘
+           │   (Terminal)    │     │                 │
+           └─────────────────┘     │        ┌────────┴────────┐
+                                   │        ▼ (Human Reject)  ▼ (Human Approve)
+                                   │  ┌──────────────┐  ┌──────────────────┐
+                                   │  │  APPROVAL_   │  │ ACTION_SELECTED  │
+                                   │  │   REJECTED   │  └────────┬─────────┘
+                                   │  │  (Terminal)  │           │
+                                   │  └──────────────┘           │
+                                   \                             │
+                                    \────────────────────────────┘
+                                                 │
+                                                 ▼ (simulate & re-measure)
+                                       [ Improvement >= 5pp? ]
+                                         /                 \
+                                No      /                   \  Yes
+                                       ▼                     ▼
+                   ┌─────────────────────────────┐    ┌────────────┐
+                   │         ESCALATED_          │    │  RESOLVED  │
+                   │    INSUFFICIENT_RECOVERY    │    │ (Terminal) │
+                   │          (Terminal)         │    └────────────┘
+                   └─────────────────────────────┘
 ```
 
 ---

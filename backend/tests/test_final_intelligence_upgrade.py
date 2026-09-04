@@ -264,7 +264,7 @@ def test_experiment_deterministic_sha256_reproducibility():
     cmd = [
         sys.executable,
         "-c",
-        "from app.experiments import run_recovery_experiment; import json; "
+        "import sys, os; sys.path.insert(0, os.path.abspath('backend')); from app.experiments import run_recovery_experiment; import json; "
         "res = run_recovery_experiment('REROUTE', 'ADJUST_RETRY_TIMING', 100, 'Bank X card'); "
         "print(json.dumps({'lift_a': res['cohort_a']['average_lift_pp'], 'lift_b': res['cohort_b']['average_lift_pp'], 'id': res['experiment_id']}))",
     ]

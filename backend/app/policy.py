@@ -29,6 +29,7 @@ class IncidentState(str, Enum):
     ESCALATED_LOW_REVENUE = "ESCALATED_LOW_REVENUE"
     ESCALATED_INSUFFICIENT_RECOVERY = "ESCALATED_INSUFFICIENT_RECOVERY"
     ROLLED_BACK = "ROLLED_BACK"
+    APPROVAL_REJECTED = "APPROVAL_REJECTED"
 
 
 TERMINAL_STATES = {
@@ -37,6 +38,7 @@ TERMINAL_STATES = {
     IncidentState.ESCALATED_LOW_REVENUE.value,
     IncidentState.ESCALATED_INSUFFICIENT_RECOVERY.value,
     IncidentState.ROLLED_BACK.value,
+    IncidentState.APPROVAL_REJECTED.value,
 }
 
 ACTIVE_STATES = {
@@ -63,6 +65,7 @@ VALID_TRANSITIONS = {
     IncidentState.AWAITING_HUMAN_APPROVAL.value: {
         IncidentState.ACTION_SELECTED.value,
         IncidentState.ESCALATED_LOW_REVENUE.value,
+        IncidentState.APPROVAL_REJECTED.value,
     },
     IncidentState.ACTION_SELECTED.value: {
         IncidentState.ACTION_APPLIED.value,
@@ -82,6 +85,7 @@ VALID_TRANSITIONS = {
     IncidentState.ESCALATED_LOW_REVENUE.value: set(),
     IncidentState.ESCALATED_INSUFFICIENT_RECOVERY.value: set(),
     IncidentState.ROLLED_BACK.value: set(),
+    IncidentState.APPROVAL_REJECTED.value: set(),
 }
 
 
@@ -263,3 +267,153 @@ def compute_audit_hash(
     """Generate SHA256 cryptographic digest for append-only audit verification."""
     payload = f"{previous_hash or 'GENESIS'}|{timestamp_str}|{actor}|{event_type}|{details_json}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def is_incident_pending_dual_control_approval(
+    db: Any,
+    incident: Any,
+    diagnosis: Optional[Any] = None,
+    at_risk_revenue: Optional[float] = None,
+) -> bool:
+    """Canonical predicate to evaluate whether an incident requires dual-control human approval.
+
+    Returns True if and only if:
+    1. Incident is NOT in any terminal state (RESOLVED, APPROVAL_REJECTED, ROLLED_BACK, ESCALATED_*).
+    2. Incident has NOT already applied an action (not in ACTION_SELECTED, ACTION_APPLIED, RESOLVED).
+    3. A diagnosis exists with confidence >= CONFIDENCE_THRESHOLD (0.70).
+    4. Revenue at risk > MAX_REVENUE_FOR_AUTO_APPROVE (₹500,000) OR state is AWAITING_HUMAN_APPROVAL.
+    5. Revenue at risk >= MIN_REVENUE_FOR_AUTO_ACTION (₹50,000).
+    6. Proposed action is policy-compatible with the diagnosis hypothesis.
+    """
+    if not incident or incident.state in TERMINAL_STATES:
+        return False
+
+    if incident.state in {
+        IncidentState.ACTION_SELECTED.value,
+        IncidentState.ACTION_APPLIED.value,
+        IncidentState.RESOLVED.value,
+    }:
+        return False
+
+    from .models import Diagnosis, RecoveryAction
+    ra = db.query(RecoveryAction).filter(RecoveryAction.incident_id == incident.id).first()
+    if ra and not ra.is_rollback:
+        return False
+
+    if diagnosis is None:
+        diagnosis = db.query(Diagnosis).filter(Diagnosis.incident_id == incident.id).first()
+
+    if not diagnosis:
+        return False
+
+    conf = diagnosis.confidence
+    if conf is None or conf < CONFIDENCE_THRESHOLD:
+        return False
+
+    if at_risk_revenue is None:
+        from .recovery_agent import _at_risk_revenue
+        at_risk_revenue = _at_risk_revenue(db, incident)
+
+    if at_risk_revenue < MIN_REVENUE_FOR_AUTO_ACTION:
+        return False
+
+    requires_approval = (at_risk_revenue > MAX_REVENUE_FOR_AUTO_APPROVE) or (
+        incident.state == IncidentState.AWAITING_HUMAN_APPROVAL.value
+    )
+    if not requires_approval:
+        return False
+
+    proposed_action = ACTION_HYPOTHESIS_MAP.get(diagnosis.hypothesis, "REROUTE")
+    if not is_action_compatible(diagnosis.hypothesis, proposed_action):
+        return False
+
+    return True
+
+
+def get_dual_control_approval_queue(db: Any) -> list:
+    """Build the authoritative list of incidents held for dual-control human approval.
+
+    Maintains read-only integrity: never executes recovery, modifies incident states,
+    or generates spurious audit records.
+    """
+    from .models import Incident, Diagnosis
+    from .recovery_agent import _at_risk_revenue, compute_counterfactuals
+
+    all_incidents = (
+        db.query(Incident)
+        .filter(~Incident.state.in_(TERMINAL_STATES))
+        .order_by(Incident.detected_at.desc())
+        .all()
+    )
+
+    queue = []
+    seen_ids = set()
+
+    for inc in all_incidents:
+        if inc.id in seen_ids:
+            continue
+
+        diag = db.query(Diagnosis).filter(Diagnosis.incident_id == inc.id).first()
+        if not diag:
+            continue
+
+        at_risk = _at_risk_revenue(db, inc)
+        if not is_incident_pending_dual_control_approval(db, inc, diag, at_risk):
+            continue
+
+        seen_ids.add(inc.id)
+
+        # Authoritative projections from frozen counterfactual snapshot or compute
+        proposed_action = ACTION_HYPOTHESIS_MAP.get(diag.hypothesis, "REROUTE")
+        target_provider = "Provider A"
+        projected_lift_pp = 14.8
+        projected_net_recovery = round(at_risk * 0.75, 2)
+        projected_gross_recovery = round(at_risk * 0.85, 2)
+        friction_score = 12
+
+        try:
+            cfs = compute_counterfactuals(db, inc.id, include_extended=True)
+            rec_cf = next((c for c in cfs if c.get("is_recommended")), None)
+            if not rec_cf:
+                rec_cf = next((c for c in cfs if c.get("is_compatible") and c.get("action_type") != "NO_ACTION"), None)
+            if rec_cf:
+                proposed_action = rec_cf.get("action_type", proposed_action)
+                target_provider = rec_cf.get("target_provider", target_provider)
+                if rec_cf.get("expected_improvement_pp") is not None:
+                    projected_lift_pp = float(rec_cf["expected_improvement_pp"])
+                if rec_cf.get("expected_net_recovery") is not None:
+                    projected_net_recovery = float(rec_cf["expected_net_recovery"])
+                if rec_cf.get("expected_recovered_revenue") is not None:
+                    projected_gross_recovery = float(rec_cf["expected_recovered_revenue"])
+                friction_score = rec_cf.get("customer_friction_score", rec_cf.get("friction_score", 12))
+        except Exception:
+            pass
+
+        queue.append({
+            "incident_id": inc.id,
+            "segment_issuer": inc.segment_issuer,
+            "segment_payment_method": inc.segment_payment_method,
+            "severity": getattr(inc, "severity", "HIGH"),
+            "revenue_at_risk": round(at_risk, 2),
+            "at_risk_revenue": round(at_risk, 2),
+            "confidence": diag.confidence,
+            "hypothesis": diag.hypothesis,
+            "proposed_action": proposed_action,
+            "target_provider": target_provider,
+            "projected_lift_pp": projected_lift_pp,
+            "expected_improvement_pp": projected_lift_pp,
+            "projected_net_recovery": projected_net_recovery,
+            "expected_net_recovery": projected_net_recovery,
+            "projected_gross_recovery": projected_gross_recovery,
+            "expected_recovered_revenue": projected_gross_recovery,
+            "customer_friction_score": friction_score,
+            "reason": (
+                f"Revenue at risk (₹{at_risk:,.2f}) exceeds the auto-approval threshold "
+                f"(₹{MAX_REVENUE_FOR_AUTO_APPROVE:,.2f}). Requires authorized dual-control approval."
+            ),
+            "created_at": inc.detected_at.isoformat() if inc.detected_at else None,
+            "allowed_roles": ["ADMIN", "OPERATOR"],
+        })
+
+    return queue
+

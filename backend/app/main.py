@@ -40,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from .routes import dashboard, incidents, simulate, segments, evaluation, observability, providers, learning, experiments
+from .routes import dashboard, incidents, simulate, segments, evaluation, observability, providers, learning, experiments, webhooks
 
 # Register routes
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
@@ -52,6 +52,7 @@ app.include_router(observability.router, tags=["Observability"])
 app.include_router(providers.router, tags=["Providers"])
 app.include_router(learning.router, tags=["Learning"])
 app.include_router(experiments.router, tags=["Experiments"])
+app.include_router(webhooks.router)
 
 
 @app.get("/api/health")

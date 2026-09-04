@@ -111,3 +111,22 @@ def get_segment_analytics(
             "decline_codes": sorted(all_codes),
         },
     }
+
+
+@router.get("/bin-intelligence")
+def get_bin_intelligence_route(
+    issuer: Optional[str] = Query(None),
+    payment_method: Optional[str] = Query("card"),
+    bin: Optional[str] = Query(None),
+    incident_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Retrieve deep BIN-level telemetry, failure distribution, and isolation diagnosis."""
+    from ..bin_intelligence import analyze_bin_telemetry
+    return analyze_bin_telemetry(
+        db=db,
+        issuer=issuer,
+        payment_method=payment_method or "card",
+        target_bin=bin,
+        incident_id=incident_id,
+    )

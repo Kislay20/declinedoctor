@@ -10,15 +10,27 @@ class Transaction(Base):
     merchant_id = Column(String, index=True)
     amount = Column(Float)
     timestamp = Column(DateTime, index=True)
-    payment_method = Column(String)  # card/upi/netbanking/wallet
+    payment_method = Column(String, index=True)  # card/upi/netbanking/wallet
     issuer = Column(String, index=True)
-    card_network = Column(String)
-    decline_code = Column(String)
-    decline_reason = Column(String)
+    card_network = Column(String, index=True, nullable=True)
+    card_bin = Column(String, index=True, nullable=True)
+    decline_code = Column(String, index=True, nullable=True)
+    decline_reason = Column(String, nullable=True)
     retry_count = Column(Integer, default=0)
-    customer_id = Column(String)
-    routing_partner = Column(String)
+    customer_id = Column(String, index=True, nullable=True)
+    routing_partner = Column(String, nullable=True)
     success = Column(Boolean)
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id = Column(String, primary_key=True, index=True)
+    payment_id = Column(String, index=True)
+    idempotency_key = Column(String, index=True, nullable=True)
+    received_at = Column(DateTime, default=datetime.utcnow, index=True)
+    payload_json = Column(Text)
+    status = Column(String)  # PROCESSED | DUPLICATE | REJECTED
+    response_json = Column(Text, nullable=True)
 
 class Incident(Base):
     __tablename__ = "incidents"

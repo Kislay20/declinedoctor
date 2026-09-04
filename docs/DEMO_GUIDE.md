@@ -107,7 +107,7 @@ This seeds 2,610 synthetic transactions across baseline and incident windows and
 
 ---
 
-## 6. Model Evaluation Benchmark & Segment Explorer
+## 6. Model Evaluation Benchmark, Deep BIN Intelligence & Simulation Lab
 
 1. Navigate to **"Model Evaluation"** in the top navbar:
    - View genuine benchmark calculated over 60 ground-truth scenarios.
@@ -116,14 +116,20 @@ This seeds 2,610 synthetic transactions across baseline and incident windows and
      * 100% adherence on `DO NOT ACT` scenarios
      * 100% human-approval gate enforcement on high-value scenarios.
 2. Navigate to **"Segment Explorer"**:
-   - Filter by issuer (`Bank X`, `SBI`, `ICICI`), payment method, and decline code.
+   - Explore **"Issuer & Rail Segments"** with volume, decline codes, and failure distributions.
+   - Switch to **"Deep BIN Intelligence"** tab:
+     * Inspect card range telemetry across monitored BINs (e.g. `452114`, `524188`, `411111`).
+     * Observe the **Causal Isolation Verdict**: *"Evidence indicates the incident is isolated to BIN 452114 rather than an issuer-wide decline pattern."*
+     * Review synthetic 3DS authentication failure signals and gateway dispersions.
 3. Navigate to **"Simulation Lab"**:
-   - **Policy & Recovery Sandbox:** Test recovery mathematics across arbitrary volumes.
-   - **Event Stream Mode:** Emit single transaction events to watch the **9-Stage Pipeline Trace** (`RECEIVED` &rarr; `OUTCOME_MEASURED`).
-   - **Recovery Strategy Experiments:** Run safe offline A vs B cohort experiments (100 txns/cohort) with two-proportion z-tests.
-   - **Customer Retry Safety:** Inspect per-cardholder retry limits, cooldowns, and friction scores (`CUST_1042`, etc.).
-4. Inspect Dashboard Intelligence Panels:
-   - **Payment Provider Health:** View latency, failure rates, and modes for Mock Provider & Razorpay Sandbox.
-   - **Recovery Economics:** View Gross vs. Net recovery, gateway interchange fees, retry surcharges, and ROI %.
-   - **Closed-Loop Learning:** View historical effectiveness (e.g. 82% on REROUTE across 38+ attempts).
-   - **Production Observability:** Live alerts ribbon tracking provider latency, failure rate, and drift.
+   - **Policy Simulator:** Test policy gates across custom volumes, failure rates, ticket sizes, and confidence levels.
+   - **Event Stream & Webhook Ingestion Probe:** Test single event injection or trigger `POST /api/webhooks/payment` to verify Pydantic validation, idempotency caching, and the 9-stage pipeline trace (`auto_recover=False` guaranteed).
+   - **Recovery Strategy Experiments:** Run offline A/B cohort experiments (100 txns/cohort) with deterministic SHA-256 seeding and two-proportion z-tests.
+   - **Customer Safety:** Inspect per-cardholder retry limits (max 2 retries), 15-minute cooldowns, and friction indices (`CUST_1042`, etc.).
+   - **Provider Routing Optimizer:** Run multi-gateway scoring probes to evaluate composite scores for `Provider A`, `Provider B`, `Provider C`, and `Razorpay Smart Router`.
+4. Inspect Dashboard Command Center Panels:
+   - **Multi-Gateway Routing Intelligence:** View top-ranked gateway route, health, latency, fee costs, and recommendation banner.
+   - **Real-Time Incident Feed:** Switch to "Activity Feed" tab to see chronological streaming anomalies.
+   - **Dual-Control Approval Queue:** Inspect held incidents exceeding ₹500,000 ceiling.
+   - **Closed-Loop Learning:** View historical effectiveness (e.g. 82% on REROUTE across 38+ attempts) and prior calibration telemetry.
+

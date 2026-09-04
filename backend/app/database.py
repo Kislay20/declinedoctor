@@ -36,6 +36,11 @@ def ensure_schema_updated():
             cols = [r[1] for r in res]
             if cols and "counterfactuals_json" not in cols:
                 conn.execute(text("ALTER TABLE diagnoses ADD COLUMN counterfactuals_json TEXT"))
+
+            res_tx = conn.execute(text("PRAGMA table_info(transactions)")).fetchall()
+            cols_tx = [r[1] for r in res_tx]
+            if cols_tx and "card_bin" not in cols_tx:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN card_bin TEXT"))
     except Exception:
         pass
 

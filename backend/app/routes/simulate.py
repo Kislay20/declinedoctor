@@ -30,12 +30,18 @@ class SimulationRequest(BaseModel):
 
 
 class StreamEventRequest(BaseModel):
-    issuer: str = Field(default="Bank X")
-    payment_method: str = Field(default="card")
+    id: Optional[str] = None
+    issuer: str = Field(default="Bank X", min_length=1)
+    payment_method: str = Field(default="card", min_length=1)
     amount: float = Field(default=1500.0, ge=1.0)
     success: bool = Field(default=False)
     decline_code: Optional[str] = Field(default="processor_declined")
     decline_reason: Optional[str] = Field(default="Processor communication timeout")
+    card_network: Optional[str] = None
+    bin: Optional[str] = None
+    card_bin: Optional[str] = None
+    gateway: Optional[str] = None
+    merchant_id: Optional[str] = None
     auto_recover: bool = Field(default=False)
     auto_execute: Optional[bool] = Field(default=None)
     user_role: str = Field(default="OPERATOR")
@@ -64,13 +70,17 @@ def simulate_recovery(payload: SimulationRequest):
     return run_recovery_simulation(payload.model_dump())
 
 
+@router.post("/stream_event")
 @router.post("/stream")
 def stream_transaction_event(payload: StreamEventRequest, db: Session = Depends(get_db)):
     """Ingest a live stream event and process it through detection, diagnosis, policy, and recovery."""
     should_auto_recover = payload.auto_recover if payload.auto_execute is None else payload.auto_execute
+    event_data = payload.model_dump()
+    if not event_data.get("bin") and event_data.get("card_bin"):
+        event_data["bin"] = event_data["card_bin"]
     return process_transaction_event(
         db=db,
-        event=payload.model_dump(),
+        event=event_data,
         auto_recover=should_auto_recover,
         user_role=payload.user_role,
     )
