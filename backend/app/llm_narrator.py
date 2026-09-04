@@ -3,7 +3,6 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
-import google.generativeai as genai
 from pydantic import BaseModel, Field, ValidationError
 from typing import Literal
 
@@ -11,10 +10,7 @@ from typing import Literal
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
-# Configure Gemini
 api_key = os.getenv("GEMINI_API_KEY")
-if api_key:
-    genai.configure(api_key=api_key)
 
 class ActionProposal(BaseModel):
     narrative: str = Field(description="A clear, professional incident narrative explaining what happened, grounded ONLY in the provided evidence numbers.")
@@ -101,7 +97,6 @@ def _validate_llm_result(result: dict, evidence: dict, deterministic_action: str
     try:
         proposal = ActionProposal.model_validate(result)
     except AttributeError:
-        # Pydantic v1 compatibility
         try:
             proposal = ActionProposal.parse_obj(result)
         except ValidationError as exc:
@@ -122,7 +117,6 @@ def _validate_llm_result(result: dict, evidence: dict, deterministic_action: str
 
 def generate_narrative_and_action(evidence_json_str: str) -> dict:
     evidence = json.loads(evidence_json_str)
-
     deterministic_action = get_deterministic_action(evidence.get("hypothesis", ""))
 
     fallback_response = {
@@ -137,7 +131,10 @@ def generate_narrative_and_action(evidence_json_str: str) -> dict:
         return fallback_response
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
 
         prompt = f"""
         You are DeclineDoctor, a payment recovery AI agent.
@@ -151,16 +148,18 @@ def generate_narrative_and_action(evidence_json_str: str) -> dict:
         2. Based on the hypothesis '{evidence.get("hypothesis")}', you MUST select '{deterministic_action}' as the recommended_action.
         """
 
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                response_schema=ActionProposal,
-                temperature=0.1
-            )
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ActionProposal,
+            temperature=0.1,
         )
 
-        # A response that cannot be parsed/validated is rejected at the LLM trust boundary.
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=config,
+        )
+
         try:
             result = json.loads(response.text)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -174,6 +173,6 @@ def generate_narrative_and_action(evidence_json_str: str) -> dict:
         # Safety violation / malformed model output must not be silently accepted.
         raise
     except Exception as e:
-        # Availability failures may use the deterministic safe fallback.
+        # Availability failures or missing libraries use the deterministic safe fallback.
         print(f"LLM Error: {e}")
         return fallback_response

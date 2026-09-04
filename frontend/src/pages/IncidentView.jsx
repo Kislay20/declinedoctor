@@ -1,15 +1,46 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ShieldAlert, Cpu, Play, CheckCircle, ShieldCheck, AlertCircle, AlertTriangle } from "lucide-react";
+import {
+  ShieldAlert,
+  Cpu,
+  Play,
+  CheckCircle,
+  ShieldCheck,
+  AlertCircle,
+  AlertTriangle,
+  RotateCcw,
+  Sparkles,
+  HelpCircle,
+  BarChart2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+} from "lucide-react";
 import api from "../api";
+import {
+  formatCurrency,
+  formatPercent,
+  formatPp,
+  formatConfidence,
+  formatNumber,
+  formatInteger,
+  formatPValue,
+} from "../utils/format";
 
 export default function IncidentView() {
   const { id } = useParams();
   const [data, setData] = useState(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
   const [recoveryResult, setRecoveryResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [counterfactuals, setCounterfactuals] = useState([]);
+  const [explanation, setExplanation] = useState(null);
+  const [safetyCheck, setSafetyCheck] = useState(null);
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [showCounterfactuals, setShowCounterfactuals] = useState(true);
+  const [role, setRole] = useState(localStorage.getItem("declinedoctor_user_role") || "OPERATOR");
 
   const getRecommendedAction = (hypothesis) => {
     if (hypothesis === "ROUTING_CONNECTIVITY_ISSUE") return "REROUTE";
@@ -17,27 +48,55 @@ export default function IncidentView() {
     return "SUPPRESS_RETRIES";
   };
 
-  // 1. Wrap the fetch function in useCallback so it's a stable dependency
   const fetchIncidentData = useCallback(async () => {
-    const res = await api.get(`/incidents/${id}`);
-    return res.data;
+    const [incRes, cfRes, expRes, safeRes] = await Promise.all([
+      api.get(`/incidents/${id}`),
+      api.get(`/incidents/${id}/counterfactuals`).catch(() => ({ data: [] })),
+      api.get(`/incidents/${id}/explain`).catch(() => ({ data: null })),
+      api.get(`/incidents/${id}/safety`).catch(() => ({ data: null })),
+    ]);
+
+    return {
+      incidentData: incRes.data,
+      cfData: cfRes.data || [],
+      expData: expRes.data,
+      safeData: safeRes.data,
+    };
   }, [id]);
 
-  // 2. Safely call it inside useEffect and add it to the dependency array
   useEffect(() => {
     let isMounted = true;
-
     fetchIncidentData()
-      .then((fetchedData) => {
-        if (isMounted) setData(fetchedData);
+      .then((res) => {
+        if (isMounted) {
+          setData(res.incidentData);
+          setCounterfactuals(res.cfData);
+          setExplanation(res.expData);
+          setSafetyCheck(res.safeData);
+        }
       })
       .catch((err) => {
         console.error("Error fetching incident:", err);
         if (isMounted) setErrorMessage("Failed to load incident data.");
       });
 
+    const handleRoleUpdate = () => {
+      const newRole = localStorage.getItem("declinedoctor_user_role") || "OPERATOR";
+      setRole(newRole);
+      fetchIncidentData().then((res) => {
+        if (isMounted) {
+          setData(res.incidentData);
+          setCounterfactuals(res.cfData);
+          setExplanation(res.expData);
+          setSafetyCheck(res.safeData);
+        }
+      });
+    };
+    window.addEventListener("storage", handleRoleUpdate);
+
     return () => {
       isMounted = false;
+      window.removeEventListener("storage", handleRoleUpdate);
     };
   }, [fetchIncidentData]);
 
@@ -46,8 +105,11 @@ export default function IncidentView() {
     setErrorMessage(null);
     try {
       await api.post(`/incidents/${id}/diagnose`);
-      const newData = await fetchIncidentData();
-      setData(newData);
+      const res = await fetchIncidentData();
+      setData(res.incidentData);
+      setCounterfactuals(res.cfData);
+      setExplanation(res.expData);
+      setSafetyCheck(res.safeData);
     } catch (err) {
       console.error(err);
       setErrorMessage(err.response?.data?.detail || err.message || "Diagnosis failed");
@@ -56,21 +118,31 @@ export default function IncidentView() {
     }
   };
 
-  const handleRecover = async () => {
+  const handleRecover = async (explicitHumanApproval = false) => {
     setRecovering(true);
     setErrorMessage(null);
     try {
-      const actionType = getRecommendedAction(data.diagnosis?.hypothesis);
+      const actionType = getRecommendedAction(data?.diagnosis?.hypothesis);
+      const isHighValue = ((data?.incident?.at_risk_revenue || 0) > 500000);
+      const isAwaitingApproval =
+        explicitHumanApproval ||
+        data?.incident?.state === "AWAITING_HUMAN_APPROVAL" ||
+        safetyCheck?.status === "HUMAN_APPROVAL_REQUIRED" ||
+        isHighValue;
       const actionData = {
         recommended_action: actionType,
-        selected_by: "llm",
-        human_approved: data.incident?.state === "AWAITING_HUMAN_APPROVAL",
+        selected_by: isAwaitingApproval ? "human_operator" : "system",
+        human_approved: isAwaitingApproval,
+        role: role,
       };
       const res = await api.post(`/incidents/${id}/recover`, actionData);
       setRecoveryResult(res.data);
 
-      const newData = await fetchIncidentData();
-      setData(newData);
+      const refreshed = await fetchIncidentData();
+      setData(refreshed.incidentData);
+      setCounterfactuals(refreshed.cfData);
+      setExplanation(refreshed.expData);
+      setSafetyCheck(refreshed.safeData);
     } catch (err) {
       console.error(err);
       setErrorMessage(err.response?.data?.detail || err.message || "Recovery execution failed");
@@ -79,18 +151,72 @@ export default function IncidentView() {
     }
   };
 
+  const handleRollback = async () => {
+    const reason = prompt("Enter reason for rolling back this recovery action:", "Operational circuit breaker tripped");
+    if (!reason) return;
+
+    setRollingBack(true);
+    setErrorMessage(null);
+    try {
+      await api.post(`/incidents/${id}/rollback`, {
+        reason: reason,
+        role: role,
+        operator_name: `operator_${role.toLowerCase()}`,
+      });
+      const refreshed = await fetchIncidentData();
+      setData(refreshed.incidentData);
+      setCounterfactuals(refreshed.cfData);
+      setExplanation(refreshed.expData);
+      setSafetyCheck(refreshed.safeData);
+    } catch (err) {
+      console.error("Rollback error", err);
+      setErrorMessage(err.response?.data?.detail || err.message || "Rollback execution failed");
+    } finally {
+      setRollingBack(false);
+    }
+  };
+
   if (!data)
     return (
-      <div className="text-center py-10 text-slate-400">
-        Loading evidence...
-      </div>
+      <div className="text-center py-16 text-slate-400">Loading evidence...</div>
     );
 
   const { incident, diagnosis, recovery_action, outcome } = data;
   const activeOutcome = recoveryResult?.outcome || outcome;
-  const activeAction = recoveryResult?.action || recovery_action;
   const recommendedAction = diagnosis ? getRecommendedAction(diagnosis.hypothesis) : "REROUTE";
-  const displayAction = activeAction?.action_type || recommendedAction;
+
+  const isTerminal = [
+    "RESOLVED",
+    "ESCALATED_LOW_CONFIDENCE",
+    "ESCALATED_LOW_REVENUE",
+    "ESCALATED_INSUFFICIENT_RECOVERY",
+    "ROLLED_BACK",
+  ].includes(incident?.state);
+
+  const isHumanApprovalRequired =
+    incident?.state === "AWAITING_HUMAN_APPROVAL" ||
+    safetyCheck?.status === "HUMAN_APPROVAL_REQUIRED" ||
+    ((incident?.at_risk_revenue || 0) > 500000 && !activeOutcome && !isTerminal);
+
+  const isAuthorizedRole = role === "ADMIN" || role === "OPERATOR";
+
+  const canRollback =
+    (incident?.state === "RESOLVED" || incident?.state === "ACTION_APPLIED") &&
+    recovery_action &&
+    !recovery_action.is_rollback &&
+    isAuthorizedRole;
+
+  // Parse advanced stats if available
+  let advancedStats = null;
+  if (incident?.advanced_stats_json) {
+    try {
+      advancedStats = typeof incident.advanced_stats_json === "string"
+        ? JSON.parse(incident.advanced_stats_json)
+        : incident.advanced_stats_json;
+    } catch {
+      advancedStats = null;
+    }
+  }
 
   const getStatusBadge = (state) => {
     if (state === "RESOLVED") {
@@ -99,265 +225,567 @@ export default function IncidentView() {
     if (state === "AWAITING_HUMAN_APPROVAL") {
       return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">AWAITING HUMAN APPROVAL</span>;
     }
-    if (state?.startsWith("ESCALATED")) {
-      return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">{state.replace(/_/g, " ")}</span>;
+    if (state?.startsWith("ESCALATED_")) {
+      return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">{state.replace("ESCALATED_", "ESCALATED: ")}</span>;
+    }
+    if (state === "ROLLED_BACK") {
+      return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">ROLLED BACK</span>;
     }
     return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">{state}</span>;
   };
 
+  const getSafetyBannerInfo = () => {
+    if (!diagnosis) {
+      return {
+        statusText: "RECOVERY NOT YET EVALUATED",
+        reasonText: "Run diagnosis to evaluate recovery eligibility.",
+        style: "bg-slate-800/80 border-slate-700 text-slate-300",
+        icon: <Clock className="w-6 h-6 text-slate-400 flex-shrink-0" />,
+        confText: "N/A (Not Diagnosed)",
+      };
+    }
+    if (incident?.state === "RESOLVED") {
+      return {
+        statusText: "RECOVERY LOCKED — INCIDENT RESOLVED",
+        reasonText: "Further automated recovery is blocked by terminal-state protection.",
+        style: "bg-blue-500/10 border-blue-500/30 text-blue-300",
+        icon: <ShieldCheck className="w-6 h-6 text-blue-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)} (Terminal Locked)`,
+      };
+    }
+    if (incident?.state === "ESCALATED_LOW_CONFIDENCE") {
+      return {
+        statusText: "RECOVERY BLOCKED — LOW CONFIDENCE",
+        reasonText: "Confidence is below the 0.70 safety threshold. Automated recovery is blocked to prevent misrouting.",
+        style: "bg-rose-500/10 border-rose-500/30 text-rose-300",
+        icon: <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)} (< 0.70 Threshold)`,
+      };
+    }
+    if (incident?.state === "ESCALATED_LOW_REVENUE") {
+      return {
+        statusText: "RECOVERY BLOCKED — BELOW REVENUE FLOOR",
+        reasonText: "At-risk revenue is below the ₹50,000.00 minimum auto-action threshold.",
+        style: "bg-rose-500/10 border-rose-500/30 text-rose-300",
+        icon: <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)} (Below Floor)`,
+      };
+    }
+    if (incident?.state === "ESCALATED_INSUFFICIENT_RECOVERY") {
+      return {
+        statusText: "RECOVERY TERMINATED — INSUFFICIENT LIFT",
+        reasonText: "Recovery produced insufficient success rate improvement. Escalated to human on-call.",
+        style: "bg-rose-500/10 border-rose-500/30 text-rose-300",
+        icon: <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)}`,
+      };
+    }
+    if (incident?.state === "ROLLED_BACK") {
+      return {
+        statusText: "RECOVERY ROLLED BACK",
+        reasonText: "Applied mitigation has been rolled back by human operator.",
+        style: "bg-purple-500/10 border-purple-500/30 text-purple-300",
+        icon: <RotateCcw className="w-6 h-6 text-purple-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)}`,
+      };
+    }
+    if (isHumanApprovalRequired) {
+      return {
+        statusText: "HUMAN APPROVAL REQUIRED",
+        reasonText: "At-risk revenue exceeds the ₹5,00,000 automatic execution limit.",
+        style: "bg-amber-500/10 border-amber-500/30 text-amber-300",
+        icon: <AlertCircle className="w-6 h-6 text-amber-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)} (≥ 0.70)`,
+      };
+    }
+    if (safetyCheck?.status === "SAFE_TO_EXECUTE") {
+      return {
+        statusText: "SAFE TO EXECUTE",
+        reasonText: "All safety checks passed.",
+        style: "bg-emerald-500/10 border-emerald-500/30 text-emerald-300",
+        icon: <ShieldCheck className="w-6 h-6 text-emerald-400 flex-shrink-0" />,
+        confText: `${formatConfidence(diagnosis.confidence)} (≥ 0.70)`,
+      };
+    }
+    return {
+      statusText: safetyCheck?.status ? safetyCheck.status.replace(/_/g, " ") : "EVALUATION IN PROGRESS",
+      reasonText: safetyCheck?.reason || "Evaluating safety policies...",
+      style: "bg-rose-500/10 border-rose-500/30 text-rose-300",
+      icon: <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0" />,
+      confText: diagnosis ? `${formatConfidence(diagnosis.confidence)}` : "N/A",
+    };
+  };
+
+  const bannerInfo = getSafetyBannerInfo();
+
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between bg-[#1e2330] p-6 rounded-xl border border-slate-800">
+    <div className="space-y-6">
+      {/* Top Breadcrumb & Actions Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <ShieldAlert className="text-rose-500" /> Segment:{" "}
-            {incident.segment_issuer} {incident.segment_payment_method}
-          </h1>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-slate-400 text-sm">Status:</span>
-            {getStatusBadge(incident.state)}
+          <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
+            <Link to="/" className="hover:text-white transition">Dashboard</Link>
+            <span>/</span>
+            <span className="text-slate-200">Incident {incident?.id}</span>
           </div>
+          <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-100">
+            {incident?.segment_issuer} {incident?.segment_payment_method} Degradation
+            {getStatusBadge(incident?.state)}
+          </h1>
         </div>
+
         <div className="flex items-center gap-3">
           <Link
             to={`/incident/${id}/audit`}
-            className="px-4 py-2 border border-slate-700 hover:bg-slate-800 text-slate-300 rounded-lg text-sm font-medium transition"
+            className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition"
           >
-            View Audit Trail
+            Cryptographic Audit Trail
           </Link>
-          {!diagnosis ? (
+
+          {canRollback && (
             <button
-              onClick={handleDiagnose}
-              disabled={diagnosing || incident.state.startsWith("ESCALATED") || incident.state === "RESOLVED"}
-              className="bg-purple-600 hover:bg-purple-500 px-5 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 disabled:opacity-50 transition"
+              onClick={handleRollback}
+              disabled={rollingBack}
+              className="px-3.5 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 transition"
             >
-              <Cpu className="w-4 h-4" />{" "}
-              {diagnosing ? "Diagnosing..." : "Run AI Diagnosis"}
+              <RotateCcw className={`w-3.5 h-3.5 ${rollingBack ? "animate-spin" : ""}`} /> Rollback Recovery
             </button>
-          ) : (
-            <div className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg flex items-center gap-2 font-medium">
-              <CheckCircle className="w-5 h-5" /> Diagnosed
-            </div>
           )}
         </div>
       </div>
 
-      {/* Error Message */}
+      {/* Error Alert */}
       {errorMessage && (
-        <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex items-center gap-3 text-rose-400 text-sm">
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center gap-3 text-xs">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <span>{errorMessage}</span>
         </div>
       )}
 
-      {/* Grid Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Evidence Panel */}
-        <div className="bg-[#1e2330] rounded-xl border border-slate-800 p-6">
-          <h2 className="text-lg font-medium text-white mb-4 border-b border-slate-800 pb-2">
-            Statistical Evidence
-          </h2>
-          <div className="space-y-4">
-            <div className="flex justify-between">
-              <span className="text-slate-400">Success Rate Drop</span>
-              <span className="text-rose-400 font-medium">
-                {incident.drop_pp.toFixed(1)}% (from{" "}
-                {incident.baseline_success_rate.toFixed(1)}%)
-              </span>
+      {/* Safety Gate Banner (Phase 4, Updated Semantics) */}
+      <div className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-3 ${bannerInfo.style}`}>
+        <div className="flex items-center gap-3">
+          {bannerInfo.icon}
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider">
+              Safety Evaluation: {bannerInfo.statusText}
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Concentration Ratio</span>
-              <span className="text-white font-medium">
-                {(incident.concentration_ratio * 100).toFixed(1)}% of failures
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Sample Size</span>
-              <span className="text-white font-medium">
-                {incident.sample_size} txns
-              </span>
-            </div>
-            {diagnosis && (
-              <div className="flex justify-between mt-4 pt-4 border-t border-slate-800">
-                <span className="text-slate-400">Dominant Error</span>
-                <span className="text-orange-400 font-medium">
-                  {diagnosis.dominant_decline_code} (
-                  {(diagnosis.dominant_decline_code_share * 100).toFixed(1)}%)
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between mt-4 pt-4 border-t border-slate-800">
-              <span className="text-slate-400">Estimated At-Risk Revenue</span>
-              <span className="text-rose-400 font-semibold">
-                ₹{Math.round(incident.at_risk_revenue ?? incident.estimated_loss ?? 0).toLocaleString()}
-              </span>
-            </div>
+            <div className="text-xs opacity-90 mt-0.5">{bannerInfo.reasonText}</div>
           </div>
         </div>
 
-        {/* Diagnosis & Action Panel */}
-        {diagnosis && (
-          <div className="bg-gradient-to-br from-[#1e2330] to-[#151822] rounded-xl border border-slate-700 p-6 shadow-lg shadow-purple-900/10">
-            <h2 className="text-lg font-medium text-purple-400 mb-4 flex items-center gap-2">
-              <Cpu className="w-5 h-5" /> AI Root Cause Analysis
+        <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+          <span className="px-2 py-0.5 rounded bg-black/40 border border-white/10">
+            Conf: {bannerInfo.confText}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-black/40 border border-white/10">
+            Risk: {formatCurrency(incident?.at_risk_revenue)}
+          </span>
+          <span className="px-2 py-0.5 rounded bg-black/40 border border-white/10">
+            Retry Cap: {safetyCheck?.retry_limit || 2}
+          </span>
+        </div>
+      </div>
+
+      {/* Grid: Incident Evidence (Left) vs Diagnosis & Policy Action (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column (5 cols): Incident Telemetry & Evidence */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-indigo-400" /> Segment Evidence
             </h2>
-            <div className="mb-4">
-              <div className="text-sm text-slate-400 mb-1">
-                Confidence Score
+
+            <div className="grid grid-cols-2 gap-3 font-mono">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="text-slate-400 text-xs font-sans">Baseline Success</div>
+                <div className="text-lg font-bold text-slate-200 mt-1">{formatPercent(incident?.baseline_success_rate)}</div>
               </div>
-              <div className="w-full bg-slate-800 rounded-full h-2.5">
-                <div
-                  className={`h-2.5 rounded-full ${diagnosis.confidence >= 0.7 ? "bg-emerald-500" : "bg-rose-500"}`}
-                  style={{ width: `${diagnosis.confidence * 100}%` }}
-                ></div>
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="text-slate-400 text-xs font-sans">Incident Rate</div>
+                <div className="text-lg font-bold text-rose-400 mt-1">{formatPercent(incident?.incident_success_rate)}</div>
               </div>
-              <div className="text-right text-xs text-slate-300 mt-1">
-                {(diagnosis.confidence * 100).toFixed(0)}% (Deterministic)
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="text-slate-400 text-xs font-sans">Success Rate Drop</div>
+                <div className="text-lg font-bold text-rose-400 mt-1">{formatPp(incident?.drop_pp)}</div>
               </div>
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="text-slate-400 text-xs font-sans">
+                  {activeOutcome ? "Remaining Exposure" : "At-Risk Exposure"}
+                </div>
+                <div className="text-lg font-bold text-rose-400 mt-1">{formatCurrency(incident?.at_risk_revenue)}</div>
+              </div>
+
+              {activeOutcome && (
+                <>
+                  <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                    <div className="text-slate-400 text-xs font-sans">Initial At-Risk Exposure</div>
+                    <div className="text-lg font-bold text-amber-400 mt-1">
+                      {formatCurrency(
+                        incident?.initial_at_risk_revenue ||
+                        ((activeOutcome?.recovered_revenue || 0) + (incident?.at_risk_revenue || 0))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                    <div className="text-slate-400 text-xs font-sans">Recovered Revenue</div>
+                    <div className="text-lg font-bold text-emerald-400 mt-1">
+                      {formatCurrency(activeOutcome.recovered_revenue)}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
-            <div className="bg-[#0f111a] p-4 rounded-lg border border-slate-800 mb-6 text-sm text-slate-300 leading-relaxed italic">
-              "
-              {diagnosis.narrative_text ||
-                "Waiting for narrative generation..."}
-              "
-            </div>
-
-            {/* Escalated Status Notice */}
-            {incident.state.startsWith("ESCALATED") && (
-              <div className="mt-4 p-4 rounded-lg bg-rose-500/10 border border-rose-500/30">
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="w-5 h-5 text-rose-400" />
-                  <div className="font-semibold text-rose-400">
-                    {incident.state === "ESCALATED_LOW_CONFIDENCE"
-                      ? "Escalated: Low Confidence"
-                      : incident.state === "ESCALATED_LOW_REVENUE"
-                      ? "Escalated: Low Revenue"
-                      : "Escalated: Insufficient Recovery"}
+            {/* Advanced Statistics (Phase 10, Fixed Mapping & N/A Fallback) */}
+            {advancedStats && (
+              <div className="p-3.5 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
+                <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <BarChart2 className="w-3.5 h-3.5 text-indigo-400" /> Advanced Detection Statistics
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-400">
+                  <div>
+                    Z-Score:{" "}
+                    <span className="text-indigo-300 font-bold">
+                      {advancedStats.z_score !== undefined && advancedStats.z_score !== null
+                        ? formatNumber(advancedStats.z_score, 2)
+                        : "N/A"}
+                    </span>
+                  </div>
+                  <div>
+                    P-Value:{" "}
+                    <span className="text-indigo-300 font-bold">
+                      {advancedStats.p_value !== undefined && advancedStats.p_value !== null
+                        ? formatPValue(advancedStats.p_value)
+                        : "N/A"}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    95% CI:{" "}
+                    <span className="text-slate-200 font-bold">
+                      {(() => {
+                        const ci = advancedStats.confidence_interval_95 || advancedStats.incident_95_ci;
+                        if (Array.isArray(ci) && ci.length === 2 && ci[0] !== undefined && ci[1] !== undefined) {
+                          return `[${formatPercent(ci[0])}, ${formatPercent(ci[1])}]`;
+                        }
+                        return "N/A";
+                      })()}
+                    </span>
+                  </div>
+                  <div className="col-span-2">
+                    EWMA Baseline:{" "}
+                    <span className="text-slate-200 font-bold">
+                      {(() => {
+                        const ewma = advancedStats.ewma_success_rate ?? advancedStats.final_ewma_rate;
+                        if (ewma !== undefined && ewma !== null) {
+                          return formatPercent(ewma);
+                        }
+                        return "N/A";
+                      })()}
+                    </span>
                   </div>
                 </div>
-                <p className="text-sm text-slate-400 leading-relaxed">
-                  {incident.state === "ESCALATED_LOW_CONFIDENCE"
-                    ? `Confidence score (${(diagnosis.confidence * 100).toFixed(0)}%) is below the 70% threshold required for automated recovery action. Automated recovery is suppressed and escalated to human operations.`
-                    : incident.state === "ESCALATED_LOW_REVENUE"
-                    ? "At-risk revenue is below the ₹50,000 threshold. Escalated to prevent unnecessary intervention."
-                    : "Recovery simulation produced insufficient improvement (< 5 pp). Escalated to prevent harmful retries."}
-                </p>
               </div>
             )}
+          </div>
+        </div>
 
-            {/* Human Approval Required Notice & Action */}
-            {incident.state === "AWAITING_HUMAN_APPROVAL" && (
-              <div className="mt-4 p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
-                <div className="flex items-center gap-2 mb-2">
-                  <ShieldCheck className="w-5 h-5 text-amber-400" />
-                  <div className="font-semibold text-amber-400">
-                    Human Approval Required
+        {/* Right Column (7 cols): Diagnosis & Autonomous Action */}
+        <div className="lg:col-span-7 space-y-4">
+          {/* Diagnosis Card */}
+          <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-indigo-400" /> Diagnostic Engine
+              </h2>
+              {diagnosis && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400">Confidence:</span>
+                  <span className={`font-mono font-bold ${
+                    diagnosis.confidence >= 0.70 ? "text-emerald-400" : "text-rose-400"
+                  }`}>
+                    {formatConfidence(diagnosis.confidence)} ({diagnosis.confidence >= 0.70 ? "SAFE" : "BELOW 0.70 THRESHOLD"})
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {diagnosis ? (
+              <div className="space-y-3">
+                <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-xs text-slate-400">Identified Hypothesis:</span>
+                  <span className="text-xs font-bold font-mono text-indigo-300">{diagnosis.hypothesis}</span>
+                </div>
+
+                <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <span className="text-xs text-slate-400">Dominant Decline Pattern:</span>
+                  <span className="text-xs font-mono text-amber-300">
+                    {diagnosis.dominant_decline_code} ({formatPercent(diagnosis.dominant_decline_code_share * 100)})
+                  </span>
+                </div>
+
+                {diagnosis.narrative_text && (
+                  <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 text-xs text-slate-300 leading-relaxed">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-slate-400 font-semibold">
+                        AI Incident Narrative (Initial Pre-Action Evidence):
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">Pre-Action Baseline</span>
+                    </div>
+                    {diagnosis.narrative_text}
                   </div>
-                </div>
-
-                <p className="text-sm text-slate-400 leading-relaxed">
-                  At-risk revenue exceeds ₹500,000 (₹{Math.round(incident.at_risk_revenue ?? incident.estimated_loss ?? 0).toLocaleString()}). In accordance with safety guardrails, an authorized operator must approve the recovery action before execution.
-                </p>
-
-                <div className="my-3 p-3 bg-slate-900/80 rounded border border-amber-500/20 text-xs text-slate-300">
-                  <span className="text-slate-400">Proposed Action:</span> <span className="font-semibold text-amber-300">{recommendedAction}</span>
-                </div>
-
+                )}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-slate-500 border border-dashed border-slate-800 rounded-lg space-y-3">
+                <div>No diagnosis generated yet for this incident window.</div>
                 <button
-                  onClick={handleRecover}
-                  disabled={recovering}
-                  className="w-full mt-2 bg-amber-600 hover:bg-amber-500 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 transition disabled:opacity-50"
+                  onClick={handleDiagnose}
+                  disabled={diagnosing || isTerminal}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center gap-2 mx-auto transition disabled:opacity-50"
                 >
-                  <ShieldCheck className="w-5 h-5" />
-                  {recovering
-                    ? "Executing Approved Recovery..."
-                    : "Approve & Execute Recovery"}
+                  <Sparkles className={`w-3.5 h-3.5 ${diagnosing ? "animate-spin" : ""}`} />
+                  {diagnosing ? "Analyzing Evidence..." : "Run AI Diagnosis"}
                 </button>
               </div>
             )}
 
-            {/* Diagnosed & Ready for Simulation */}
-            {incident.state === "DIAGNOSED" && diagnosis.confidence >= 0.7 && (
-              <>
-                <div className="mb-4 p-4 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                  <div className="text-xs uppercase tracking-wide text-slate-400 mb-1">
-                    Recommended Recovery Action
+            {/* Action Execution / Human Approval Section (Issue 8) */}
+            {diagnosis && !activeOutcome && !isTerminal && (
+              <div className="pt-2">
+                {isHumanApprovalRequired ? (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+                    <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider">
+                      <AlertCircle className="w-4 h-4" /> HUMAN APPROVAL REQUIRED
+                    </div>
+                    <p className="text-xs text-amber-200/90 leading-relaxed">
+                      At-risk revenue exceeds the ₹5,00,000 automatic execution limit. Dual-control human verification is strictly required by policy before applying mitigation.
+                    </p>
+                    {isAuthorizedRole ? (
+                      <button
+                        onClick={() => handleRecover(true)}
+                        disabled={recovering}
+                        className="w-full py-2.5 px-4 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 text-white bg-amber-600 hover:bg-amber-500 transition shadow-lg shadow-amber-900/20"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        {recovering ? "Executing Mitigation..." : `Approve & Execute ${recommendedAction} (${role})`}
+                      </button>
+                    ) : (
+                      <div className="p-3 bg-slate-900/90 rounded-lg border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                        <span>
+                          Approval Restricted: Current role ({role}) is not authorized to approve high-value actions. Operator or Admin privileges required.
+                        </span>
+                      </div>
+                    )}
                   </div>
-
-                  <div className="text-lg font-semibold text-blue-400">
-                    {recommendedAction}
+                ) : incident?.state === "ESCALATED_LOW_CONFIDENCE" ? (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-300 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                    <span>Mitigation blocked by low-confidence safety gate (&lt; 0.70). Escalated to payment operations.</span>
                   </div>
-
-                  <div className="text-xs text-slate-400 mt-1">
-                    Confidence threshold passed ({(diagnosis.confidence * 100).toFixed(0)}% &ge; 70%) — recovery simulation is permitted.
+                ) : isAuthorizedRole ? (
+                  <button
+                    onClick={() => handleRecover(false)}
+                    disabled={recovering}
+                    className="w-full py-2.5 px-4 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 text-white bg-emerald-600 hover:bg-emerald-500 transition"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    {recovering ? "Executing Mitigation..." : `Execute Automated Recovery: ${recommendedAction}`}
+                  </button>
+                ) : (
+                  <div className="p-3 bg-slate-900/90 rounded-lg border border-slate-700/60 text-slate-400 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+                    <span>
+                      Execution Restricted: Current role ({role}) is {role === "ANALYST" ? "analysis-only" : "read-only"}. Operator or Admin privileges required to execute recovery.
+                    </span>
                   </div>
-                </div>
-
-                <button
-                  onClick={handleRecover}
-                  disabled={recovering}
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 transition disabled:opacity-50"
-                >
-                  <Play className="w-5 h-5" />
-                  {recovering
-                    ? "Simulating Recovery..."
-                    : "Execute Recovery Simulation"}
-                </button>
-              </>
+                )}
+              </div>
             )}
 
-            {/* Recovery Outcome (survives page refresh via activeOutcome) */}
+            {/* Outcome Measured Display */}
             {activeOutcome && (
-              <div className="mt-4 p-5 rounded-lg border bg-emerald-500/10 border-emerald-500/30">
-                <div className="flex items-center gap-2 mb-4">
-                  <CheckCircle className="w-5 h-5 text-emerald-400" />
-                  <h3 className="font-semibold text-emerald-400">
-                    Recovery Outcome: {activeOutcome.result}
-                  </h3>
+              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-3 mt-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-emerald-400 flex items-center gap-1.5 uppercase">
+                    <CheckCircle className="w-4 h-4" /> Recovery Outcome Measured
+                  </div>
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                    {activeOutcome.result}
+                  </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <div className="text-slate-400">Action</div>
-                    <div className="text-white font-semibold">{displayAction}</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                  <div className="p-2 bg-black/30 rounded">
+                    <div className="text-[10px] text-slate-400 font-sans">Recovered Revenue</div>
+                    <div className="font-bold text-emerald-400 mt-0.5">{formatCurrency(activeOutcome.recovered_revenue)}</div>
                   </div>
-
-                  <div>
-                    <div className="text-slate-400">Success Rate</div>
-                    <div className="text-white font-semibold">
-                      {activeOutcome.pre_success_rate?.toFixed(1)}%
-                      {" → "}
-                      {activeOutcome.post_success_rate?.toFixed(1)}%
-                    </div>
+                  <div className="p-2 bg-black/30 rounded">
+                    <div className="text-[10px] text-slate-400 font-sans">Transactions Flipped</div>
+                    <div className="font-bold text-slate-200 mt-0.5">{formatInteger(activeOutcome.transactions_flipped)}</div>
                   </div>
-
-                  <div>
-                    <div className="text-slate-400">Improvement</div>
-                    <div className="text-emerald-400 font-semibold">
-                      +
-                      {(
-                        activeOutcome.post_success_rate -
-                        activeOutcome.pre_success_rate
-                      ).toFixed(2)}{" "}
-                      pp
-                    </div>
+                  <div className="p-2 bg-black/30 rounded">
+                    <div className="text-[10px] text-slate-400 font-sans">Pre Success Rate</div>
+                    <div className="font-bold text-slate-300 mt-0.5">{formatPercent(activeOutcome.pre_success_rate)}</div>
                   </div>
-
-                  <div>
-                    <div className="text-slate-400">Recovered Revenue</div>
-                    <div className="text-emerald-400 font-semibold">
-                      ₹
-                      {activeOutcome.recovered_revenue?.toLocaleString()}
+                  <div className="p-2 bg-black/30 rounded">
+                    <div className="text-[10px] text-slate-400 font-sans">Post Success Rate</div>
+                    <div className="font-bold text-emerald-400 mt-0.5">
+                      {formatPercent(activeOutcome.post_success_rate)} (+{formatNumber(activeOutcome.post_success_rate - activeOutcome.pre_success_rate, 2)} pp)
                     </div>
                   </div>
                 </div>
               </div>
             )}
           </div>
-        )}
+        </div>
       </div>
+
+      {/* Counterfactual Recovery Actions Comparison (Phase 3, Pre-Action Snapshot & SBI Labeling) */}
+      {counterfactuals.length > 0 && (
+        <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
+          <div
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => setShowCounterfactuals(!showCounterfactuals)}
+          >
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                  <BarChart2 className="w-4 h-4 text-indigo-400" /> Counterfactual Action Comparison Matrix
+                </h2>
+                <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[10px] font-semibold">
+                  PRE-ACTION PROJECTIONS
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Genuine expected outcomes evaluated against initial pre-action incident transactions.
+              </p>
+            </div>
+            {showCounterfactuals ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </div>
+
+          {showCounterfactuals && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              {counterfactuals.map((cf) => {
+                const isLowConfIncident = (incident?.state === "ESCALATED_LOW_CONFIDENCE") || ((diagnosis?.confidence || 0) < 0.70);
+                const isRecommended = cf.is_recommended && !isLowConfIncident;
+                const isLowConfCompatible = isLowConfIncident && cf.is_compatible;
+
+                return (
+                  <div
+                    key={cf.action_type}
+                    className={`p-4 rounded-xl border flex flex-col justify-between space-y-3 ${
+                      isRecommended
+                        ? "bg-indigo-500/10 border-indigo-500/40"
+                        : "bg-slate-900/60 border-slate-800"
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold font-mono text-slate-200">
+                          {cf.action_type}
+                        </span>
+                        {isRecommended && (
+                          <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
+                            RECOMMENDED
+                          </span>
+                        )}
+                        {isLowConfCompatible && (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                            NOT EXECUTED — LOW CONFIDENCE
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono my-3">
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Projected Lift</div>
+                          <div className="font-bold text-emerald-400">+{formatNumber(cf.expected_improvement_pp, 2)} pp</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Recovered Rev</div>
+                          <div className="font-bold text-slate-200">{formatCurrency(cf.expected_recovered_revenue)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Txns Affected</div>
+                          <div className="font-bold text-slate-300">{formatInteger(cf.transactions_affected)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Compatibility</div>
+                          <div className={`font-bold ${cf.is_compatible ? "text-emerald-400" : "text-rose-400"}`}>
+                            {cf.is_compatible ? "Compatible" : "Incompatible"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-800/80 pt-2">
+                        {cf.rationale}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Explainability Section (Phase 14) */}
+      {explanation && (
+        <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
+          <div
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => setShowExplanation(!showExplanation)}
+          >
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <HelpCircle className="w-4 h-4 text-emerald-400" /> Evidence-Grounded Explainability
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Authoritative reasoning explaining why DeclineDoctor acted, held, or stopped on this incident.
+              </p>
+            </div>
+            {showExplanation ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </div>
+
+          {showExplanation && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              <div className="p-3.5 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+                <div className="text-xs font-semibold text-indigo-400">Why did DeclineDoctor act?</div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  {explanation.questions.why_did_declinedoctor_act}
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+                <div className="text-xs font-semibold text-amber-400">Why did DeclineDoctor not act?</div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  {explanation.questions.why_did_declinedoctor_not_act}
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+                <div className="text-xs font-semibold text-rose-400">Why did DeclineDoctor stop?</div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  {explanation.questions.why_did_declinedoctor_stop}
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
+                <div className="text-xs font-semibold text-blue-400">Why is human approval required?</div>
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  {explanation.questions.why_is_human_approval_required}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

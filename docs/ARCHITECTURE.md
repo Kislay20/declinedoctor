@@ -1,139 +1,147 @@
 # DeclineDoctor Technical Architecture 🏗️
 
-DeclineDoctor is an autonomous payments reliability and revenue recovery platform. It bridges statistical stream anomaly detection with deterministic expert systems, constrained LLM narrative synthesis, and strict financial guardrails.
+DeclineDoctor is an autonomous payments reliability, anomaly detection, and revenue recovery engine. It combines advanced statistical detection, deterministic causal diagnosis, constrained LLM narrative synthesis, and strict backend safety guardrails.
 
 ---
 
 ## High-Level Architecture Diagram
 
 ```
-[ Transaction Stream / SQLite Database ]
-                    │
-                    ▼
-       ┌─────────────────────────┐
-       │ Anomaly Detection Engine│  (14-Day Baseline vs 2-Hour Window)
-       └────────────┬────────────┘
-                    │  Creates Incident & ANOMALY_DETECTED AuditLog
-                    ▼
-       ┌─────────────────────────┐
-       │ Deterministic Diagnosis │  (Root-cause mapping & Confidence scoring)
-       └────────────┬────────────┘
-                    ├──────────────────────────┐
-                    ▼                          ▼
-       ┌─────────────────────────┐ ┌───────────────────────────┐
-       │ Advisory LLM Narrator   │ │ Backend Safety Guardrails │
-       │ (Gemini 2.5 Flash +     │ │ - Confidence Gate (>=0.70)│
-       │  Numeric Grounding)     │ │ - Auto-Action Min (>=₹50k)│
-       └────────────┬────────────┘ │ - Human Approval (>₹500k) │
-                    │              │ - Terminal State Lock     │
-                    │              └─────────────┬─────────────┘
-                    └────────────────────────────┘
-                                   │
-                                   ▼
-                      ┌─────────────────────────┐
-                      │ Recovery Action Engine  │
-                      │ (Simulation & Retries)  │
-                      └────────────┬────────────┘
-                                   │
-                                   ▼
-                      ┌─────────────────────────┐
-                      │  Outcome & Audit Trail  │
-                      │  (SQLite Real AuditLog) │
-                      └─────────────────────────┘
+[ Transaction Event Stream / Configurable DB (SQLite / PostgreSQL) ]
+                               │
+                               ▼
+                ┌──────────────────────────────┐
+                │  Statistical Detection Engine│ (Z-score, p-value, 95% CI, EWMA)
+                └──────────────┬───────────────┘
+                               │ Creates Incident & Logs SHA-256 Audit Event
+                               ▼
+                ┌──────────────────────────────┐
+                │  Causal Diagnosis Engine     │ (Dominant code, Confidence formula,
+                └──────────────┬───────────────┘  Expanded decline taxonomy)
+                               │
+                ├──────────────┴───────────────┐
+                ▼                              ▼
+ ┌─────────────────────────────┐ ┌────────────────────────────────────────┐
+ │ Advisory LLM Narrator       │ │ Strict Backend Policy & Guardrails     │
+ │ (google.genai SDK +         │ │ - Confidence Gate (>= 0.70)            │
+ │  Numeric Grounding          │ │ - Revenue Floor Gate (>= ₹50,000)      │
+ │  Validator)                 │ │ - Auto-Approval Ceiling (<= ₹500,000)  │
+ └──────────────┬──────────────┘ │ - Action Compatibility Matrix          │
+                │                │ - Role-Based Access Control (RBAC)     │
+                │                │ - Max Retry Budget Ceiling (<= 2)      │
+                │                └──────────────────┬─────────────────────┘
+                └───────────────────────────────────┘
+                               │
+                               ▼
+                ┌──────────────────────────────┐
+                │ Counterfactual Action Engine │ (Evaluates REROUTE, ADJUST_TIMING,
+                └──────────────┬───────────────┘  and SUPPRESS_RETRIES)
+                               │
+                               ▼
+                ┌──────────────────────────────┐
+                │ Payment Provider Abstraction │ (MockPaymentProvider for demo;
+                │ & Recovery Execution         │  RazorpayPaymentProvider adapter)
+                └──────────────┬───────────────┘
+                               │
+                ├──────────────┴───────────────┐
+                ▼                              ▼
+ ┌─────────────────────────────┐ ┌────────────────────────────────────────┐
+ │ Cryptographic Audit Trail   │ │ Rollback & Safety Service              │
+ │ (Append-Only SHA-256 Hash   │ │ (Reverts flipped transactions,         │
+ │  Chained Verification)      │ │  restores baseline, logs proof)        │
+ └─────────────────────────────┘ └────────────────────────────────────────┘
 ```
 
 ---
 
-## 1. Data Models & Persistence
+## 1. Data Models & Database Abstraction
 
-The backend utilizes SQLite via SQLAlchemy ORM with thread-safe connection pooling:
+Supported by SQLAlchemy ORM with thread-safe connection pooling and configurable `DATABASE_URL` (SQLite for local demo; PostgreSQL production compatible):
 
-- **`Transaction`**: Raw payment records containing `id`, `merchant_id`, `amount`, `timestamp`, `payment_method`, `issuer`, `card_network`, `decline_code`, `decline_reason`, `retry_count`, `routing_partner`, and `success`.
-- **`Incident`**: Tracks anomalies with `segment_issuer`, `segment_payment_method`, `window_start`, `window_end`, `baseline_success_rate`, `incident_success_rate`, `drop_pp`, `concentration_ratio`, `sample_size`, and `state`.
-- **`Diagnosis`**: Stores the root-cause `hypothesis`, `confidence`, `dominant_decline_code`, `dominant_decline_code_share`, `evidence_json`, and advisory `narrative_text`.
-- **`RecoveryAction`**: Records actions (`REROUTE`, `ADJUST_RETRY_TIMING`, `SUPPRESS_RETRIES`), execution actor (`system` / `llm`), reasoning, and timestamp.
-- **`Outcome`**: Quantifies post-intervention impact: `improvement_pp`, `recovered_revenue`, and `resulting_success_rate`.
-- **`AuditLog`**: Tamper-proof, append-only security log recording every lifecycle transition: `timestamp`, `actor`, `event_type`, and `details_json`.
-
----
-
-## 2. Anomaly Detection Engine (`app/detection.py`)
-
-1. **Window Aggregation**: Evaluates transactions in the active incident window ($t - 2\text{ hours}$ to $t$) and compares them to a historical 14-day baseline.
-2. **Segmentation**: Slices traffic by `(issuer, payment_method)`.
-3. **Drop Calculation**: Computes percentage-point drop:
-   $$\text{Drop}_{\text{pp}} = (\text{Baseline Success Rate} - \text{Incident Success Rate}) \times 100$$
-4. **Concentration Ratio**: Computes the segment's share of total method-wide failures:
-   $$\text{Concentration} = \frac{\text{Failures}_{\text{segment}}}{\text{Failures}_{\text{payment\_method}}}$$
-5. **Threshold Trigger**: Triggers an incident when $\text{Drop}_{\text{pp}} \ge 15.0$ and $\text{Sample Size} \ge 20$.
-6. **Audit Event**: Emits `ANOMALY_DETECTED` into the database.
+- **`Transaction`**: Raw payment records: `id`, `merchant_id`, `amount`, `timestamp`, `payment_method`, `issuer`, `card_network`, `decline_code`, `decline_reason`, `retry_count`, `routing_partner`, `success`.
+- **`Incident`**: Tracks anomalies: `segment_issuer`, `segment_payment_method`, `window_start`, `window_end`, `baseline_success_rate`, `incident_success_rate`, `drop_pp`, `concentration_ratio`, `sample_size`, `state`, `severity`, `advanced_stats_json`.
+- **`Diagnosis`**: Stores causal `hypothesis`, `confidence`, `dominant_decline_code`, `dominant_decline_code_share`, `evidence_json`, and advisory `narrative_text`.
+- **`RecoveryAction`**: Records mitigation actions, selected actor, reasoning, `applied_at`, `approved_by`, `approved_at`, `role`, `is_rollback`, and `rolled_back_from_id`.
+- **`Outcome`**: Quantifies post-intervention impact: `pre_success_rate`, `post_success_rate`, `recovered_revenue`, `transactions_flipped`, and `result`.
+- **`AuditLog`**: Append-only, cryptographically sealed security log with `previous_hash` and `record_hash`.
 
 ---
 
-## 3. Deterministic Diagnosis Engine (`app/diagnosis.py`)
+## 2. Advanced Statistical Detection (`app/detection.py`)
 
-1. **Dominant Decline Analysis**: Determines the highest-frequency decline reason in the incident window.
-2. **Hypothesis Mapping**:
-   - `processor_declined` / `gateway_timeout` $\rightarrow$ `ROUTING_CONNECTIVITY_ISSUE`
-   - `try_again_later` $\rightarrow$ `BIN_LEVEL_TEMPORARY_ISSUE`
-   - `insufficient_funds` / `do_not_honor` $\rightarrow$ `ISSUER_SIDE_DECLINE`
-   - Unrecognized / diffuse codes $\rightarrow$ `INSUFFICIENT_SIGNAL`
-3. **Confidence Scoring Formula**:
-   $$\text{Confidence} = 0.5 \times \text{Concentration} + 0.3 \times \text{Dominant Share} + 0.2 \times \min\left(\frac{\text{Sample Size}}{150}, 1.0\right)$$
-4. **Confidence Gate**:
-   - If $\text{Confidence} < 0.70$: Marks incident as `ESCALATED_LOW_CONFIDENCE`, emits `ESCALATION` audit log, and blocks automated action.
-   - If $\text{Confidence} \ge 0.70$: Transitions incident to `DIAGNOSED`.
-5. **Terminal Protection**: If incident is already in a terminal state, skips re-diagnosis and preserves terminal state.
-6. **Idempotency**: Reuses existing `Diagnosis` row to prevent duplicate database rows.
+Compares active window traffic against historical 14-day baselines:
+1. **Two-Proportion Pooled Z-Test**:
+   $$Z = \frac{p_1 - p_2}{\sqrt{p(1-p)\left(\frac{1}{n_1} + \frac{1}{n_2}\right)}}$$
+2. **Two-Tailed P-Value**: Quantifies statistical significance ($p < 0.001$).
+3. **95% Confidence Interval**:
+   $$CI_{95\%} = (p_1 - p_2) \pm 1.96 \times SE$$
+4. **Exponentially Weighted Moving Average (EWMA)**:
+   $$EWMA_t = \alpha \cdot X_t + (1 - \alpha) \cdot EWMA_{t-1}, \quad \alpha = 0.3$$
+5. **Concentration Ratio**: Segment failure volume relative to payment-method failure volume.
+
+---
+
+## 3. Causal Diagnosis & Decline Taxonomy (`app/diagnosis.py`)
+
+Maps dominant decline patterns to causal hypotheses:
+- **Routing / Network Issues** (`processor_declined`, `gateway_timeout`, `network_error`, `issuer_unavailable`) &rarr; `ROUTING_CONNECTIVITY_ISSUE`
+- **Temporary BIN / Throttles** (`try_again_later`, `velocity_limit`) &rarr; `BIN_LEVEL_TEMPORARY_ISSUE`
+- **Issuer Terminal Declines** (`insufficient_funds`, `do_not_honor`, `3ds_failure`, `authentication_failed`) &rarr; `ISSUER_SIDE_DECLINE`
+- **Diffuse Noise** &rarr; `INSUFFICIENT_SIGNAL`
+
+**Authoritative Confidence Formula:**
+$$\text{Confidence} = 0.5 \times \text{Concentration} + 0.3 \times \text{Dominant Share} + 0.2 \times \min\left(\frac{\text{Sample Size}}{150}, 1.0\right)$$
 
 ---
 
 ## 4. Constrained LLM Advisory Subsystem (`app/llm_narrator.py`)
 
-1. **Model**: Powered by Google Gemini `gemini-2.5-flash` with structured Pydantic schema generation (`ActionProposal`).
-2. **Numeric Grounding Validator (`_validate_narrative_numbers`)**:
-   - Extracts all numbers from the LLM narrative.
-   - Allows calendar formatting, dates (`2026-09-04`), hours/minutes (`14:00`), list items (`1.`, `2.`), and small integers ($\le 4$).
-   - Reconciles every statistical or financial number (percentages, sample sizes, currency values) against `evidence_json`.
-   - Rejects ungrounded or hallucinated claims.
-3. **Deterministic Fallback**: If LLM API fails, times out, or hallucinates numbers, the system automatically falls back to deterministic rule-based proposals without crashing.
+- Uses the official Google GenAI SDK (`google.genai`) with structured Pydantic schema generation (`ActionProposal`).
+- **Numeric Grounding Validator**: Extracts all numbers from the narrative, excludes timestamps/dates/durations/identifiers/bullet items, and strictly reconciles all remaining numeric claims against structured evidence.
+- **Deterministic Safe Fallback**: If LLM times out or is offline, the system falls back to rule-based generation without interruption.
 
 ---
 
-## 5. Recovery Simulation & Safety Guardrails (`app/recovery_agent.py`)
+## 5. Counterfactual Action Projections (`app/recovery_agent.py`)
 
-The backend is the sole authority for financial safety and execution:
-
-1. **Terminal Check**: Rejects any actions on terminal incidents (`RESOLVED`, `ESCALATED_*`).
-2. **Confidence Check**: Re-verifies confidence $\ge 0.70$.
-3. **At-Risk Revenue Gate**:
-   - If At-Risk $< ₹50,000$: Transitions to `ESCALATED_LOW_REVENUE`.
-   - If At-Risk $> ₹500,000$ and `human_approved` is `False`: Holds incident in `AWAITING_HUMAN_APPROVAL`, emits `HUMAN_APPROVAL_REQUIRED` audit event, and immediately halts execution.
-4. **Retry Budget Hard Ceiling**: Strictly caps simulated retries to $\le 2$ per transaction.
-5. **Action Simulation**:
-   - `REROUTE`: Simulates routing through alternate partner (`Router_Beta`), converting eligible failures to success.
-   - `ADJUST_RETRY_TIMING`: Simulates backoff retry intervals.
-   - `SUPPRESS_RETRIES`: Blocks futile retries to preserve customer balance and avoid fee penalties.
-6. **Outcome Threshold**: Verifies measurable improvement $\ge 5.0$ percentage points. If $< 5.0$ pp, marks `ESCALATED_INSUFFICIENT_RECOVERY`.
+For every diagnosed incident, DeclineDoctor calculates genuine projected outcomes across all candidate actions:
+- `REROUTE` (42% effect size)
+- `ADJUST_RETRY_TIMING` (21% effect size)
+- `SUPPRESS_RETRIES` (0% effect size)
+Evaluates projected transactions flipped, recovered revenue, projected post-intervention success rate, and domain compatibility.
 
 ---
 
-## 6. Audit Trail & Immutability (`AuditLog`)
+## 6. Payment Provider Abstraction (`app/providers/`)
 
-All state changes are permanently logged to SQLite:
-- `ANOMALY_DETECTED` (at detection time)
-- `DIAGNOSED` (at diagnosis time)
-- `ESCALATION` (for low confidence or low revenue)
-- `HUMAN_APPROVAL_REQUIRED` (when revenue exceeds ₹500,000)
-- `ACTION_SELECTED` (when recovery action is chosen)
-- `OUTCOME_MEASURED` (when recovery simulation succeeds)
-- `RECOVERY_BLOCKED` (when terminal state or guardrails reject action)
+- Abstract contract `PaymentProvider` defines `reroute_traffic`, `adjust_retry_timing`, `suppress_retries`, `check_gateway_health`, and `rollback_reroute`.
+- `MockPaymentProvider`: Deterministic sandbox provider for demo and automated regression testing.
+- `RazorpayPaymentProvider`: Production adapter interface.
+- Factory pattern ensures mock provider is active without exposing API keys.
 
 ---
 
-## 7. Frontend Interface (`frontend/src/`)
+## 7. Cryptographic Append-Only Audit Trail (`app/audit.py`)
 
-- Built with **React 18** and **Vite**, styled with clean, responsive dark-mode aesthetics using Tailwind utility classes and Lucide icons.
-- **`Dashboard.jsx`**: Real-time KPI cards (Global Success Rate, Active Incidents, Revenue at Risk, Recovered Revenue), Active vs Historical incident tabs, and a one-click Demo Reset / Re-seed action.
-- **`IncidentView.jsx`**: Deep-dive triage view showing evidence breakdown, dominant decline distribution, advisory LLM narrative, human approval interactive card, and simulated recovery outcomes.
-- **`AuditTrail.jsx`**: Real-time chronological audit trail loaded directly from the backend database.
+Every lifecycle event is permanently recorded in an append-only SHA-256 hash chain:
+$$H_i = \text{SHA-256}(H_{i-1} \parallel \text{Timestamp} \parallel \text{Actor} \parallel \text{EventType} \parallel \text{DetailsJSON})$$
+Provides continuous tamper detection via `GET /api/incidents/{id}/audit/verify`.
+
+---
+
+## 8. Role-Based Access Control (`app/policy.py`)
+
+Enforces dual control for high-value financial actions:
+- **`ADMIN`** & **`OPERATOR`**: Authorized to approve recoveries exceeding ₹500,000 and trigger rollbacks.
+- **`ANALYST`** & **`VIEWER`**: Read-only access; action requests are blocked at the backend boundary.
+
+---
+
+## 9. Rollback Engine (`app/recovery_agent.py`)
+
+If an intervention causes adverse network side effects:
+- Operator triggers rollback with reason.
+- Reverts flipped transaction states back to failed.
+- Decrements simulated retry counts.
+- Transitions incident to `ROLLED_BACK`.
+- Logs `ROLLBACK_EXECUTED` in cryptographic audit trail.

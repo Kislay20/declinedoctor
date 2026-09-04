@@ -5,8 +5,12 @@ from sqlalchemy.orm import Session
 from .models import Transaction, Incident, AuditLog
 import uuid
 from datetime import datetime
+from typing import Optional
+from .policy import ACTIVE_STATES, TERMINAL_STATES, IncidentState
 
-def detect_anomalies(db: Session, current_time: datetime):
+def detect_anomalies(db: Session, current_time: Optional[datetime] = None):
+    if current_time is None:
+        current_time = datetime.now()
     start_time = current_time - timedelta(days=7)
     txns = db.query(Transaction).filter(Transaction.timestamp >= start_time, Transaction.timestamp <= current_time).all()
     
@@ -42,6 +46,9 @@ def detect_anomalies(db: Session, current_time: datetime):
     anomalies = comparison[(comparison["drop_pp"] >= 15.0) & (comparison["sample_size"] >= 50)]
 
     
+    import math
+    from .audit import log_audit_event
+
     for _, row in anomalies.iterrows():
         issuer, method = row["segment"].split("_")
         
@@ -63,7 +70,101 @@ def detect_anomalies(db: Session, current_time: datetime):
             if method_failures > 0
             else 0
         )
+
+        # Advanced Statistical Calculations (genuine EWMA, Z-score, 95% CI, p-value)
+        n1 = int(baseline_stats.loc[baseline_stats["segment"] == row["segment"], "count"].values[0]) if "count" in baseline_stats else 100
+        p1 = float(row["baseline_rate"])
+        n2 = int(row["sample_size"])
+        p2 = float(row["incident_rate"])
+
+        # Pooled standard error and Z-score
+        pooled_p = (n1 * p1 + n2 * p2) / (n1 + n2) if (n1 + n2) > 0 else 0.5
+        se_pooled = math.sqrt(pooled_p * (1.0 - pooled_p) * (1.0 / n1 + 1.0 / n2)) if (n1 > 0 and n2 > 0 and 0 < pooled_p < 1) else 0.01
+        z_score = (p1 - p2) / se_pooled if se_pooled > 0 else 0.0
+        p_value = math.erfc(abs(z_score) / math.sqrt(2)) # Two-tailed standard normal p-value
+
+        # 95% Confidence Intervals
+        ci_baseline_margin = 1.96 * math.sqrt(p1 * (1.0 - p1) / n1) if n1 > 0 and 0 < p1 < 1 else 0.02
+        ci_incident_margin = 1.96 * math.sqrt(p2 * (1.0 - p2) / n2) if n2 > 0 and 0 < p2 < 1 else 0.04
+
+        # Hourly EWMA over the incident window (alpha = 0.3)
+        segment_inc_txns = incident_df[incident_df["segment"] == row["segment"]].sort_values("timestamp")
+        ewma = p1 * 100.0
+        alpha = 0.3
+        ewma_points = []
+        if len(segment_inc_txns) > 0:
+            for _, t_row in segment_inc_txns.iterrows():
+                val = 100.0 if t_row["success"] else 0.0
+                ewma = alpha * val + (1.0 - alpha) * ewma
+            ewma_points.append(round(ewma, 2))
+
+        ci_incident = [round(max(0.0, p2 - ci_incident_margin) * 100, 2), round(min(1.0, p2 + ci_incident_margin) * 100, 2)]
+        ci_baseline = [round(max(0.0, p1 - ci_baseline_margin) * 100, 2), round(min(1.0, p1 + ci_baseline_margin) * 100, 2)]
+
+        advanced_stats = {
+            "z_score": round(z_score, 2),
+            "p_value": round(p_value, 6),
+            "statistically_significant": p_value < 0.01,
+            "baseline_95_ci": ci_baseline,
+            "incident_95_ci": ci_incident,
+            "confidence_interval_95": ci_incident,
+            "final_ewma_rate": round(ewma, 2),
+            "ewma_success_rate": round(ewma, 2),
+            "drift_severity": "HIGH_DRIFT" if abs(z_score) > 3.0 else "MODERATE_DRIFT",
+        }
         
+        # 1. Check for an ongoing active incident on this segment
+        existing_active = (
+            db.query(Incident)
+            .filter(
+                Incident.segment_issuer == issuer,
+                Incident.segment_payment_method == method,
+                Incident.state.in_(ACTIVE_STATES),
+            )
+            .order_by(Incident.detected_at.desc())
+            .first()
+        )
+
+        if existing_active:
+            # Idempotently update metrics without creating duplicate Incident rows or duplicate audit logs
+            if existing_active.state == IncidentState.ANOMALY_DETECTED.value:
+                existing_active.baseline_success_rate = row["baseline_rate"] * 100
+                existing_active.incident_success_rate = row["incident_rate"] * 100
+                existing_active.drop_pp = row["drop_pp"]
+                existing_active.concentration_ratio = concentration_ratio
+                existing_active.sample_size = row["sample_size"]
+                existing_active.severity = "HIGH" if row["drop_pp"] >= 35.0 else "MEDIUM"
+                existing_active.advanced_stats_json = json.dumps(advanced_stats)
+                existing_active.window_end = current_time
+            else:
+                existing_active.sample_size = row["sample_size"]
+                existing_active.window_end = current_time
+
+            db.commit()
+            db.refresh(existing_active)
+            detected_incidents.append(existing_active)
+            continue
+
+        # 2. Check if a recent terminal incident already covers this anomaly window
+        recent_terminal = (
+            db.query(Incident)
+            .filter(
+                Incident.segment_issuer == issuer,
+                Incident.segment_payment_method == method,
+                Incident.state.in_(TERMINAL_STATES),
+            )
+            .order_by(Incident.detected_at.desc())
+            .first()
+        )
+
+        if recent_terminal:
+            # If the terminal incident was detected within the current 12-hour window,
+            # it represents the same historical anomaly that has already reached a terminal state.
+            terminal_cutoff = recent_terminal.window_end or recent_terminal.detected_at
+            if terminal_cutoff and (current_time <= terminal_cutoff + timedelta(hours=6)):
+                detected_incidents.append(recent_terminal)
+                continue
+
         incident = Incident(
             id=f"inc_{uuid.uuid4().hex[:12]}",
             detected_at=current_time,
@@ -71,35 +172,39 @@ def detect_anomalies(db: Session, current_time: datetime):
             segment_payment_method=method,
             window_start=window_start,
             window_end=current_time,
-            # FIX: Multiply by 100 so it stores 93.0 instead of 0.93
+            # Multiply by 100 so it stores 93.0 instead of 0.93
             baseline_success_rate=row["baseline_rate"] * 100,
             incident_success_rate=row["incident_rate"] * 100,
             drop_pp=row["drop_pp"],
             concentration_ratio=concentration_ratio,
             sample_size=row["sample_size"],
-            state="ANOMALY_DETECTED"
+            state="ANOMALY_DETECTED",
+            severity="HIGH" if row["drop_pp"] >= 35.0 else "MEDIUM",
+            advanced_stats_json=json.dumps(advanced_stats)
         )
         db.add(incident)
         db.commit()
         db.refresh(incident)
 
-        # Real backend audit log for ANOMALY_DETECTED
-        audit = AuditLog(
+        # Hash-chained backend audit log for ANOMALY_DETECTED
+        log_audit_event(
+            db=db,
             incident_id=incident.id,
-            timestamp=current_time,
             actor="system",
             event_type="ANOMALY_DETECTED",
-            details_json=json.dumps({
+            details={
                 "segment": f"{issuer} {method}",
                 "drop_pp": f"{row['drop_pp']:.1f}%",
                 "sample_size": int(row["sample_size"]),
                 "baseline_success_rate": f"{row['baseline_rate'] * 100:.1f}%",
                 "incident_success_rate": f"{row['incident_rate'] * 100:.1f}%",
-                "concentration_ratio": f"{concentration_ratio * 100:.1f}%"
-            })
+                "concentration_ratio": f"{concentration_ratio * 100:.1f}%",
+                "z_score": advanced_stats["z_score"],
+                "p_value": advanced_stats["p_value"],
+                "significant": advanced_stats["statistically_significant"],
+            },
+            timestamp=current_time,
         )
-        db.add(audit)
-        db.commit()
 
         detected_incidents.append(incident)
         

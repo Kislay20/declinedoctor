@@ -34,6 +34,8 @@ class Incident(Base):
     concentration_ratio = Column(Float)
     sample_size = Column(Integer)
     state = Column(String) # lifecycle/guardrail states including human-approval and escalation terminals
+    severity = Column(String, default="MEDIUM") # CRITICAL | HIGH | MEDIUM | LOW
+    advanced_stats_json = Column(Text, nullable=True) # EWMA, Z-score, 95% CI, p-value
 
 class Diagnosis(Base):
     __tablename__ = "diagnoses"
@@ -46,6 +48,7 @@ class Diagnosis(Base):
     dominant_decline_code_share = Column(Float)
     evidence_json = Column(Text)
     narrative_text = Column(Text)
+    counterfactuals_json = Column(Text, nullable=True) # Pre-action candidate action evaluation snapshot
 
 class RecoveryAction(Base):
     __tablename__ = "recovery_actions"
@@ -56,6 +59,11 @@ class RecoveryAction(Base):
     selected_by = Column(String) # llm | deterministic_fallback
     reasoning_text = Column(Text)
     applied_at = Column(DateTime, default=datetime.utcnow)
+    approved_by = Column(String, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    role = Column(String, default="OPERATOR")
+    is_rollback = Column(Boolean, default=False)
+    rolled_back_from_id = Column(String, nullable=True)
 
 class Outcome(Base):
     __tablename__ = "outcomes"
@@ -66,7 +74,7 @@ class Outcome(Base):
     post_success_rate = Column(Float)
     recovered_revenue = Column(Float)
     transactions_flipped = Column(Integer)
-    result = Column(String) # resolved | escalated_insufficient | escalated_low_confidence
+    result = Column(String) # resolved | escalated_insufficient | escalated_low_confidence | rolled_back
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -77,3 +85,5 @@ class AuditLog(Base):
     actor = Column(String) # system | llm | human
     event_type = Column(String)
     details_json = Column(Text)
+    previous_hash = Column(String, nullable=True)
+    record_hash = Column(String, nullable=True)

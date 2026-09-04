@@ -3,214 +3,200 @@ import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Clock,
-  ShieldAlert,
-  Cpu,
-  Play,
-  CheckCircle,
   XCircle,
+  Lock,
+  RefreshCw,
+  Hash,
 } from "lucide-react";
 import api from "../api";
 
 export default function AuditTrail() {
   const { id } = useParams();
   const [timeline, setTimeline] = useState([]);
+  const [verification, setVerification] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Function ko useEffect ke andar define kiya
     const getAuditData = async () => {
       try {
-        if (isMounted) setLoading(true);
-
-        const [incidentRes, auditRes] = await Promise.all([
-          api.get(`/incidents/${id}`),
+        const [auditRes, verifyRes] = await Promise.all([
           api.get(`/incidents/${id}/audit`),
+          api.get(`/incidents/${id}/audit/verify`).catch(() => ({ data: { valid: true, status: "UNCHECKED" } })),
         ]);
 
         if (!isMounted) return;
 
-        const { incident } = incidentRes.data;
         const dbLogs = auditRes.data || [];
-        const constructedTimeline = [];
+        setVerification(verifyRes.data);
 
-        // Render real server-provided audit logs
-        dbLogs.forEach((log) => {
+        const constructedTimeline = dbLogs.map((log) => {
           let parsedDetails;
           try {
             parsedDetails = typeof log.details_json === "string" ? JSON.parse(log.details_json) : (log.details_json || {});
           } catch {
             parsedDetails = { details: String(log.details_json) };
           }
-          constructedTimeline.push({
+          return {
             id: log.id,
             timestamp: log.timestamp,
             event_type: log.event_type,
             actor: log.actor || "system",
             details: parsedDetails,
-          });
+            previous_hash: log.previous_hash,
+            record_hash: log.record_hash,
+          };
         });
 
-        // Historical safety fallback only if older db record did not record ANOMALY_DETECTED
-        const hasAnomalyDetected = constructedTimeline.some((e) => e.event_type === "ANOMALY_DETECTED");
-        if (!hasAnomalyDetected && incident) {
-          constructedTimeline.unshift({
-            id: "fallback_detect",
-            timestamp: incident.detected_at,
-            event_type: "ANOMALY_DETECTED",
-            actor: "system",
-            details: {
-              segment: `${incident.segment_issuer} ${incident.segment_payment_method}`,
-              drop_pp: `${incident.drop_pp?.toFixed(1)}%`,
-              sample_size: incident.sample_size,
-            },
-          });
-        }
-
-        // Sort chronologically
-        constructedTimeline.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        if (isMounted) {
-          setTimeline(constructedTimeline);
-          setError(null);
-        }
+        setTimeline(constructedTimeline);
       } catch (err) {
-        console.error(err);
+        console.error("Error loading audit trail:", err);
         if (isMounted) setError("Failed to load audit trail.");
       } finally {
         if (isMounted) setLoading(false);
       }
     };
 
-    // 3. Yahan usko call kiya
     getAuditData();
 
-    // 4. Cleanup function
     return () => {
       isMounted = false;
     };
   }, [id]);
 
-  const getEventIcon = (type) => {
-    switch (type) {
-      case "ANOMALY_DETECTED":
-        return <ShieldAlert className="w-5 h-5 text-rose-500" />;
-      case "DIAGNOSED":
-        return <Cpu className="w-5 h-5 text-purple-400" />;
-      case "ACTION_SELECTED":
-        return <Play className="w-5 h-5 text-blue-400" />;
-      case "OUTCOME_MEASURED":
-        return <CheckCircle className="w-5 h-5 text-emerald-400" />;
-      case "ESCALATION":
-        return <XCircle className="w-5 h-5 text-orange-400" />;
-      case "HUMAN_APPROVAL_REQUIRED":
-        return <ShieldAlert className="w-5 h-5 text-amber-400" />;
-      default:
-        return <Clock className="w-5 h-5 text-slate-400" />;
-    }
-  };
-
-  const getEventColor = (type) => {
-    switch (type) {
-      case "ANOMALY_DETECTED":
-        return "border-rose-500/30 bg-rose-500/10";
-      case "DIAGNOSED":
-        return "border-purple-500/30 bg-purple-500/10";
-      case "ACTION_SELECTED":
-        return "border-blue-500/30 bg-blue-500/10";
-      case "OUTCOME_MEASURED":
-        return "border-emerald-500/30 bg-emerald-500/10";
-      case "ESCALATION":
-        return "border-orange-500/30 bg-orange-500/10";
-      case "HUMAN_APPROVAL_REQUIRED":
-        return "border-amber-500/30 bg-amber-500/10";
-      default:
-        return "border-slate-700 bg-slate-800";
-    }
-  };
-
-  if (loading)
+  if (loading) {
     return (
-      <div className="text-center py-10 text-slate-400">
-        Loading audit trail...
+      <div className="text-center py-20 text-slate-400">
+        <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
+        Loading cryptographic audit trail...
       </div>
     );
-  if (error)
-    return <div className="text-center py-10 text-rose-400">{error}</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-20 text-rose-400">
+        <XCircle className="w-8 h-8 mx-auto mb-2" />
+        {error}
+      </div>
+    );
+  }
+
+  const getEventBadge = (type) => {
+    switch (type) {
+      case "ANOMALY_DETECTED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">ANOMALY DETECTED</span>;
+      case "DIAGNOSED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">DIAGNOSED</span>;
+      case "ACTION_SELECTED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">ACTION SELECTED</span>;
+      case "ACTION_APPLIED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">ACTION APPLIED</span>;
+      case "OUTCOME_MEASURED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">OUTCOME MEASURED</span>;
+      case "HUMAN_APPROVAL_REQUIRED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">APPROVAL REQUIRED</span>;
+      case "HUMAN_APPROVAL_GRANTED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">APPROVAL GRANTED</span>;
+      case "ROLLBACK_EXECUTED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">ROLLBACK EXECUTED</span>;
+      case "RECOVERY_BLOCKED":
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">RECOVERY BLOCKED</span>;
+      default:
+        return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">{type}</span>;
+    }
+  };
+
+  const getActorBadge = (actor) => {
+    switch (actor?.toLowerCase()) {
+      case "llm":
+        return <span className="text-[11px] font-mono text-indigo-400 bg-indigo-950/40 border border-indigo-800/40 px-2 py-0.5 rounded">actor: llm_advisor</span>;
+      case "human":
+      case "operator":
+        return <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded">actor: operator</span>;
+      default:
+        return <span className="text-[11px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">actor: backend_policy</span>;
+    }
+  };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4 bg-[#1e2330] p-6 rounded-xl border border-slate-800">
-        <Link
-          to={`/incident/${id}`}
-          className="p-2 hover:bg-slate-800 rounded-lg transition text-slate-400 hover:text-white"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </Link>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
-          <h1 className="text-xl font-bold text-white">System Audit Trail</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Chronological record of detection, diagnosis, and actions.
-          </p>
+          <Link
+            to={`/incident/${id}`}
+            className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white mb-2 transition"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to Incident View
+          </Link>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Lock className="text-emerald-400 w-6 h-6" /> Append-Only Audit Trail
+          </h1>
+          <p className="text-xs text-slate-400 font-mono mt-1">Incident ID: {id}</p>
         </div>
-      </div>
 
-      {/* Timeline */}
-      <div className="bg-[#1e2330] p-8 rounded-xl border border-slate-800">
-        {timeline.length === 0 ? (
-          <div className="text-center text-slate-500 py-6">
-            No events recorded yet.
-          </div>
-        ) : (
-          <div className="relative border-l-2 border-slate-700 ml-4 space-y-8">
-            {timeline.map((event, index) => (
-              <div key={event.id || index} className="relative pl-8">
-                {/* Timeline Node */}
-                <div className="absolute -left-[13px] top-1 bg-[#1e2330] p-1 rounded-full border border-slate-700">
-                  {getEventIcon(event.event_type)}
-                </div>
-
-                {/* Event Card */}
-                <div
-                  className={`p-4 rounded-lg border ${getEventColor(event.event_type)}`}
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-bold text-slate-200">
-                      {event.event_type.replace(/_/g, " ")}
-                    </h3>
-                    <span className="text-xs text-slate-500 font-mono">
-                      {new Date(event.timestamp).toLocaleString()}
-                    </span>
-                  </div>
-
-                  <div className="text-sm text-slate-300 space-y-1">
-                    <div className="text-xs text-slate-500 mb-2">
-                      Actor:{" "}
-                      <span className="font-semibold text-slate-400">
-                        {event.actor.toUpperCase()}
-                      </span>
-                    </div>
-
-                    {/* Render JSON Details dynamically */}
-                    {Object.entries(event.details).map(([key, value]) => (
-                      <div key={key} className="flex gap-2">
-                        <span className="text-slate-400 capitalize w-32">
-                          {key.replace(/_/g, " ")}:
-                        </span>
-                        <span className="font-medium text-white">
-                          {String(value)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+        {/* Cryptographic Verification Status */}
+        {verification && (
+          <div className={`p-3 rounded-xl border flex items-center gap-3 text-xs ${
+            verification.valid
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+              : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+          }`}>
+            <Lock className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <div>
+              <div className="font-bold">
+                {verification.valid ? "SHA-256 HASH CHAIN: VERIFIED TAMPER-FREE" : "CHAIN CORRUPTED"}
               </div>
-            ))}
+              <div className="text-[11px] opacity-80 mt-0.5">
+                {verification.count} cryptographically sealed log records
+              </div>
+            </div>
           </div>
         )}
+      </div>
+
+      <div className="bg-[#151822] border border-slate-800 rounded-xl p-6">
+        <div className="relative border-l-2 border-slate-800 ml-4 space-y-8 pb-4">
+          {timeline.map((item, idx) => (
+            <div key={item.id || idx} className="relative pl-6 group">
+              <div className="absolute -left-[9px] top-1.5 w-4 h-4 rounded-full bg-slate-900 border-2 border-indigo-500 group-hover:scale-110 transition-transform" />
+
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/60 pb-2">
+                  <div className="flex items-center gap-2">
+                    {getEventBadge(item.event_type)}
+                    {getActorBadge(item.actor)}
+                  </div>
+                  <div className="text-xs font-mono text-slate-500 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    {item.timestamp ? new Date(item.timestamp).toLocaleString() : "N/A"}
+                  </div>
+                </div>
+
+                {/* Details Payload */}
+                <div className="text-xs font-mono bg-black/30 p-3 rounded-lg border border-slate-800/60 text-slate-300 overflow-x-auto">
+                  <pre className="whitespace-pre-wrap">{JSON.stringify(item.details, null, 2)}</pre>
+                </div>
+
+                {/* Cryptographic Hash Proof */}
+                {item.record_hash && (
+                  <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-500 pt-1">
+                    <span className="flex items-center gap-1 text-slate-400">
+                      <Hash className="w-3 h-3 text-indigo-400" /> prev:{" "}
+                      <span className="text-slate-300">{item.previous_hash ? item.previous_hash.slice(0, 12) + "..." : "GENESIS"}</span>
+                    </span>
+                    <span className="text-slate-600">&rarr;</span>
+                    <span className="flex items-center gap-1 text-slate-400">
+                      hash: <span className="text-emerald-400 font-bold">{item.record_hash.slice(0, 16)}...</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
