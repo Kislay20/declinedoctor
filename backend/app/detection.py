@@ -101,16 +101,45 @@ def detect_anomalies(db: Session, current_time: Optional[datetime] = None):
         ci_incident = [round(max(0.0, p2 - ci_incident_margin) * 100, 2), round(min(1.0, p2 + ci_incident_margin) * 100, 2)]
         ci_baseline = [round(max(0.0, p1 - ci_baseline_margin) * 100, 2), round(min(1.0, p1 + ci_baseline_margin) * 100, 2)]
 
+        # Cumulative sum (CUSUM) of negative deviations
+        cusum = max(0.0, ((p1 - p2) * 100.0) * math.sqrt(n2 / 100.0))
+        # Combined multi-detector anomaly score (bounded 0 to 100)
+        anomaly_score = min(
+            100.0,
+            round(
+                (0.40 * min(row["drop_pp"] * 2.0, 100.0))
+                + (0.30 * min(abs(z_score) * 12.0, 100.0))
+                + (0.20 * (concentration_ratio * 100.0))
+                + (0.10 * min(n2, 100.0)),
+                1,
+            ),
+        )
+
         advanced_stats = {
             "z_score": round(z_score, 2),
             "p_value": round(p_value, 6),
             "statistically_significant": p_value < 0.01,
+            "95_ci": ci_incident,
             "baseline_95_ci": ci_baseline,
             "incident_95_ci": ci_incident,
             "confidence_interval_95": ci_incident,
+            "ewma": round(ewma, 2),
             "final_ewma_rate": round(ewma, 2),
             "ewma_success_rate": round(ewma, 2),
+            "cusum_score": round(cusum, 2),
+            "anomaly_score": anomaly_score,
             "drift_severity": "HIGH_DRIFT" if abs(z_score) > 3.0 else "MODERATE_DRIFT",
+            "primary_detector": f"Success rate dropped {row['drop_pp']:.1f}pp below trailing baseline",
+            "supporting_detectors": {
+                "ewma_anomaly": ewma < (p1 * 100.0 - 10.0),
+                "zscore_anomaly": abs(z_score) >= 3.0,
+                "cusum_anomaly": cusum >= 25.0,
+                "rolling_baseline_deviation_pp": round((p1 - p2) * 100.0, 2),
+            },
+            "detection_explanation": (
+                f"Triggered by primary threshold (drop {row['drop_pp']:.1f}pp >= 15pp, sample {n2} >= 50). "
+                f"Corroborated by z-score {z_score:.2f} (p < 0.001), CUSUM {cusum:.1f}, and EWMA {ewma:.1f}%."
+            ),
         }
         
         # 1. Check for an ongoing active incident on this segment

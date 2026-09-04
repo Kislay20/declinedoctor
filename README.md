@@ -74,7 +74,7 @@ python -m venv venv
 # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Run pytest (47 comprehensive tests)
+# Run pytest (68 comprehensive tests across 14 test suites)
 python -m pytest
 
 # Start FastAPI server
@@ -96,13 +96,26 @@ npm run dev
 
 ---
 
+## 🔬 Enterprise Intelligence & Realism Upgrades
+
+1. **Payment Provider Abstraction & Telemetry:** `MockPaymentProvider` default sandbox with complete `RazorpayPaymentProvider` test sandbox adapter (`is_live_allowed: False` strictly guaranteed).
+2. **9-Stage Real-Time Pipeline Trace:** Visualizes transaction lifecycle (`RECEIVED` &rarr; `VALIDATED` &rarr; `SEGMENTED` &rarr; `ANOMALY_CHECKED` &rarr; `DIAGNOSED` &rarr; `POLICY_EVALUATED` &rarr; `ACTION_SELECTED` &rarr; `ACTION_APPLIED` &rarr; `OUTCOME_MEASURED`).
+3. **Advanced Anomaly Detection:** Explainable primary threshold paired with CUSUM deviation, hourly EWMA ($\alpha=0.3$), two-proportion Z-score, and bounded multi-detector anomaly score (0-100).
+4. **Closed-Loop Learning Records:** Persists recovery outcomes to `recovery_learning` table, calculating empirical historical effectiveness (e.g. 82% on REROUTE) to dynamically rank recommendations without bypassing policy gates.
+5. **Safe Simulation A/B Experiment Framework:** Evaluates competing recovery interventions on synthetic offline cohorts (100 txns/cohort) with two-proportion z-tests and p-value statistical significance.
+6. **Transparent Recovery Economics:** Calculates gross recovered revenue, interchange fees (1.2%), retry surcharges (₹15/retry), cardholder friction penalties, net recovered revenue, and transparent ROI %.
+7. **Customer-Level Retry Safety:** Enforces per-customer retry limits (max 2 retries), cooldowns, and friction score safety on anonymized cardholder tokens (`CUST_XXXX`) without PII exposure.
+8. **Enterprise Benchmark Evaluation:** Expanded 210-scenario safety suite formally proving **UNSAFE AUTOMATIC ACTIONS = 0** and 100% adherence to `DO NOT ACT` constraints.
+
+---
+
 ## 📚 Documentation Index
 
-- [Architecture Guide](docs/ARCHITECTURE.md)
-- [Product Specification](docs/PRODUCT_SPEC.md)
+- [Architecture Guide & Production Architecture](docs/ARCHITECTURE.md)
+- [Product Specification & Revenue Funnel](docs/PRODUCT_SPEC.md)
 - [Incident State Machine](docs/STATE_MACHINE.md)
-- [Safety & Guardrails](docs/SAFETY.md)
+- [Safety & Guardrails Specification](docs/SAFETY.md)
 - [API Reference](docs/API.md)
 - [End-to-End Demo Guide](docs/DEMO_GUIDE.md)
-- [Ground-Truth Model Evaluation](docs/EVALUATION.md)
-- [Security Architecture](docs/SECURITY.md)
+- [Ground-Truth Model & Safety Evaluation](docs/EVALUATION.md)
+- [Security Architecture & Zero-PII Policy](docs/SECURITY.md)

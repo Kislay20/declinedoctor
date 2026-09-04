@@ -40,3 +40,26 @@ class PaymentProvider(ABC):
     def rollback_reroute(self, segment: str, original_gateway: str) -> Dict[str, Any]:
         """Revert traffic routing back to original gateway."""
         pass
+
+    @abstractmethod
+    def create_test_payment(
+        self,
+        amount: float,
+        currency: str = "INR",
+        customer_id: str = "cust_test",
+        payment_method: str = "card",
+        issuer: str = "Bank X",
+        simulate_failure_code: str = None,
+    ) -> Dict[str, Any]:
+        """Create a bounded test transaction in sandbox mode without live capital."""
+        pass
+
+    @abstractmethod
+    def inspect_payment(self, payment_id: str) -> Dict[str, Any]:
+        """Fetch metadata, state, and retry history of a test transaction."""
+        pass
+
+    @abstractmethod
+    def get_provider_health(self) -> Dict[str, Any]:
+        """Retrieve operational health, latency, error rate, and current mode."""
+        pass

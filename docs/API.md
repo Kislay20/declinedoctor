@@ -102,10 +102,39 @@ Ingests a live transaction event through the continuous monitoring pipeline (`Tr
 Granular segment performance breakdown filterable by `issuer`, `payment_method`, and `decline_code`.
 
 ### `GET /evaluation`
-Runs model benchmark over the 60 ground-truth scenarios and returns Precision, Recall, F1 Score, FPR, FNR, and Confusion Matrix.
+Runs model benchmark over the 60 ground-truth scenarios (or 210 enterprise scenarios if `?expanded=true`) and returns Precision, Recall, F1 Score, FPR, FNR, safety metrics, and zero-unsafe-action proofs.
 
 ### `GET /observability`
-Telemetry report including database connectivity, audit chain integrity, processing throughput, error counts, and latency percentiles.
+Telemetry report including database connectivity, audit chain integrity, processing throughput, error counts, latency percentiles, and stage latencies.
+
+### `GET /observability/alerts`
+Live evaluation of 5 production alert rules: Provider health degradation, High recovery failure rate, Unusual escalation spike, Model confidence degradation, and Recovery rollback spike.
+
+---
+
+## 5. Provider & Intelligence Telemetry
+
+### `GET /providers/health`
+Operational telemetry for Mock Provider and Razorpay Test Sandbox (status, latency, error rate, failure rate, current mode, and live-mode disablement status).
+
+### `POST /providers/test_payment`
+Executes an isolated test payment probe through the active sandbox provider without live money movement.
+
+### `GET /learning/summary`
+Global recovery learning summary (historical attempts, global effectiveness %, per-action effectiveness, and dynamic recommendation ranking).
+
+### `GET /learning/effectiveness`
+Calculates empirical historical effectiveness, average lift, and confidence modifier for a proposed candidate action.
+- **Parameters:** `action` (e.g., `REROUTE`), `segment`, `hypothesis`.
+
+### `GET /experiments/summary`
+Deterministic offline A/B cohort experiment comparing two recovery actions across 100 failed transactions (sample size, lift, net revenue, friction score, and two-proportion z-test p-value).
+
+### `POST /experiments/run`
+Runs custom offline cohort experiment with configurable actions, sample size, and segment ticket sizes.
+
+### `GET /simulate/customers`
+Returns demo customer profiles with retry caps, friction scores, and cooldown safety states (anonymized `CUST_XXXX`).
 
 ### `GET /health`
 System liveness check (`status: ok`).

@@ -74,3 +74,10 @@ def stream_transaction_event(payload: StreamEventRequest, db: Session = Depends(
         auto_recover=should_auto_recover,
         user_role=payload.user_role,
     )
+
+
+@router.get("/customers")
+def get_customer_safety_profiles():
+    """Retrieve anonymized customer retry safety profiles and friction limits."""
+    from ..customer_safety import get_demo_customer_profiles
+    return get_demo_customer_profiles()

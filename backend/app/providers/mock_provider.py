@@ -52,3 +52,57 @@ class MockPaymentProvider(PaymentProvider):
             "restored_gateway": original_gateway,
             "message": f"Traffic for {segment} successfully reverted to {original_gateway}",
         }
+
+    def create_test_payment(
+        self,
+        amount: float,
+        currency: str = "INR",
+        customer_id: str = "cust_test",
+        payment_method: str = "card",
+        issuer: str = "Bank X",
+        simulate_failure_code: str = None,
+    ) -> Dict[str, Any]:
+        is_success = simulate_failure_code is None
+        payment_id = f"pay_mock_{abs(hash((amount, customer_id, payment_method))) % 1000000:06d}"
+        return {
+            "id": payment_id,
+            "amount": amount,
+            "currency": currency,
+            "status": "captured" if is_success else "failed",
+            "method": payment_method,
+            "issuer": issuer,
+            "customer_id": customer_id,
+            "error_code": simulate_failure_code,
+            "error_description": "Routing gateway rejected the BIN path" if simulate_failure_code else None,
+            "provider": "MockPaymentProvider",
+            "mode": "DEMO_SANDBOX",
+            "is_live_transaction": False,
+            "simulated_latency_ms": 42,
+        }
+
+    def inspect_payment(self, payment_id: str) -> Dict[str, Any]:
+        return {
+            "id": payment_id,
+            "status": "captured",
+            "amount": 1500.0,
+            "currency": "INR",
+            "provider": "MockPaymentProvider",
+            "retry_count": 0,
+            "routing_partner": "Router_Beta",
+            "mode": "DEMO_SANDBOX",
+        }
+
+    def get_provider_health(self) -> Dict[str, Any]:
+        from datetime import datetime
+        return {
+            "provider": "Mock Payment Provider",
+            "status": "HEALTHY",
+            "latency_ms": 42.0,
+            "error_rate": 0.0,
+            "recent_failure_rate": 0.0,
+            "last_checked": datetime.now().isoformat(),
+            "mode": "MOCK / DEMO MODE",
+            "is_live": False,
+            "is_live_allowed": False,
+            "active_rules_count": 3,
+        }

@@ -16,6 +16,11 @@ class ActionProposal(BaseModel):
     narrative: str = Field(description="A clear, professional incident narrative explaining what happened, grounded ONLY in the provided evidence numbers.")
     recommended_action: Literal["REROUTE", "ADJUST_RETRY_TIMING", "SUPPRESS_RETRIES"] = Field(description="The bounded recovery action to take.")
     reasoning: str = Field(description="Why this specific action was chosen based on the dominant decline code and hypothesis.")
+    supporting_signals: list[str] = Field(default_factory=list, description="Observed evidence signals supporting this hypothesis.")
+    contradicting_signals: list[str] = Field(default_factory=list, description="Contradicting or alternative hypotheses considered.")
+    alternatives: list[str] = Field(default_factory=list, description="Available alternative candidate actions.")
+    uncertainty: str = Field(default="LOW", description="Qualitative or quantitative assessment of residual uncertainty.")
+    evidence_references: list[str] = Field(default_factory=list, description="Data points and metrics referenced directly from evidence.")
 
 def get_deterministic_action(hypothesis: str) -> str:
     # Domain rules mapping (Section 5 of Spec)
@@ -123,6 +128,22 @@ def generate_narrative_and_action(evidence_json_str: str) -> dict:
         "narrative": f"Detected a success rate drop of {evidence.get('drop_pp')}% on {evidence['segment']['issuer']} {evidence['segment']['payment_method']} segment. The dominant decline pattern is '{evidence.get('dominant_decline_code')}' at {evidence.get('dominant_decline_code_share')*100}%.",
         "recommended_action": deterministic_action,
         "reasoning": "Deterministic fallback selected based on hypothesis domain rules.",
+        "supporting_signals": [
+            f"Dominant decline code '{evidence.get('dominant_decline_code')}' accounts for {int(evidence.get('dominant_decline_code_share', 0.8) * 100)}% of segment failures.",
+            f"Concentration ratio of {int(evidence.get('concentration_ratio', 0.5) * 100)}% confirms issuer-method isolation.",
+        ],
+        "contradicting_signals": [
+            f"Baseline historical success rate was {evidence.get('baseline_success_rate')}% prior to the incident window.",
+        ],
+        "alternatives": [
+            a for a in ["REROUTE", "ADJUST_RETRY_TIMING", "SUPPRESS_RETRIES"] if a != deterministic_action
+        ],
+        "uncertainty": "LOW" if float(evidence.get("confidence", 0.7)) >= 0.70 else "HIGH",
+        "evidence_references": [
+            f"code:{evidence.get('dominant_decline_code')}",
+            f"drop_pp:{evidence.get('drop_pp')}",
+            f"sample:{evidence.get('sample_size')}",
+        ],
         "selected_by": "deterministic_fallback"
     }
 

@@ -105,16 +105,25 @@ This seeds 2,610 synthetic transactions across baseline and incident windows and
 
 ---
 
+---
+
 ## 6. Model Evaluation Benchmark & Segment Explorer
 
 1. Navigate to **"Model Evaluation"** in the top navbar:
-   - View genuine benchmark calculated over 60 ground-truth scenarios:
-     * Accuracy: **~96.7%**
-     * Precision: **~96.3%**
-     * Recall: **~98.1%**
-     * F1 Score: **~97.2%**
+   - View genuine benchmark calculated over 60 ground-truth scenarios.
+   - Toggle **"Enterprise Stress & Safety Suite (210 Cases)"**:
+     * Verified **UNSAFE AUTOMATIC ACTIONS = 0**
+     * 100% adherence on `DO NOT ACT` scenarios
+     * 100% human-approval gate enforcement on high-value scenarios.
 2. Navigate to **"Segment Explorer"**:
    - Filter by issuer (`Bank X`, `SBI`, `ICICI`), payment method, and decline code.
 3. Navigate to **"Simulation Lab"**:
-   - Test sandbox recovery across custom failure rates and ticket sizes.
-   - Switch to **Event Stream Mode** to emit single transaction events through the live pipeline.
+   - **Policy & Recovery Sandbox:** Test recovery mathematics across arbitrary volumes.
+   - **Event Stream Mode:** Emit single transaction events to watch the **9-Stage Pipeline Trace** (`RECEIVED` &rarr; `OUTCOME_MEASURED`).
+   - **Recovery Strategy Experiments:** Run safe offline A vs B cohort experiments (100 txns/cohort) with two-proportion z-tests.
+   - **Customer Retry Safety:** Inspect per-cardholder retry limits, cooldowns, and friction scores (`CUST_1042`, etc.).
+4. Inspect Dashboard Intelligence Panels:
+   - **Payment Provider Health:** View latency, failure rates, and modes for Mock Provider & Razorpay Sandbox.
+   - **Recovery Economics:** View Gross vs. Net recovery, gateway interchange fees, retry surcharges, and ROI %.
+   - **Closed-Loop Learning:** View historical effectiveness (e.g. 82% on REROUTE across 38+ attempts).
+   - **Production Observability:** Live alerts ribbon tracking provider latency, failure rate, and drift.

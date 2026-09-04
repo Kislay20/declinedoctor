@@ -12,11 +12,24 @@ In global payment processing, silent decline spikes cost merchants and fintech p
 
 ---
 
-## 2. Target Personas & User Stories
+## 2.1 Top-Level Revenue Recovery Funnel & Economics
 
-- **FinTech Operations Engineer**: Needs instant alerting with evidence breakdown and root cause attribution rather than raw logs.
-- **FinOps / Treasury Lead**: Requires strict financial guardrails ensuring no large-ticket interventions occur without human approval.
-- **Compliance & Risk Officer**: Demands a tamper-proof audit trail of every automated proposal, human decision, and simulated outcome.
+DeclineDoctor visualizes revenue recovery through an end-to-end 7-stage conversion funnel:
+
+```
+PAYMENTS ➔ FAILED PAYMENTS ➔ REVENUE AT RISK ➔ DIAGNOSED ➔ RECOVERY ELIGIBLE ➔ RECOVERED ➔ NET RECOVERED
+```
+
+### Transparent Economic Formula & Cost Breakdown:
+Every recovery intervention accounts for processing, gateway, retry, and cardholder friction costs:
+
+$$\text{Net Recovered Revenue} = \text{Gross Recovered} - (\text{Gateway Fees} + \text{Retry Overhead} + \text{Customer Friction})$$
+$$\text{ROI \%} = \frac{\text{Net Recovered Revenue}}{\text{Total Operational Costs}} \times 100$$
+
+- **Gateway Processing Fees:** Standard 1.2% merchant interchange/routing fee.
+- **Retry Surcharges:** ₹15.00 estimated fee per network retry probe.
+- **Customer Friction Cost:** ₹5.00 estimated friction/churn risk penalty per retry attempt.
+- **Strict Guardrail:** All cost assumptions are calibrated for enterprise Indian payments and transparently labeled with demo disclaimers.
 
 ---
 

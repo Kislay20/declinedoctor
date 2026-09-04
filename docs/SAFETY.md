@@ -18,18 +18,37 @@ The LLM is strictly advisory. All authorization decisions are owned by backend s
 
 ---
 
-## 2. Action / Hypothesis Compatibility Matrix
+## 2. Expanded Action / Hypothesis Compatibility Matrix
 
 Actions must conform strictly to domain causality:
 
-| Diagnostic Hypothesis | Permitted Action | Prohibited Actions | Rationale |
+| Diagnostic Hypothesis | Permitted Actions | Prohibited Actions | Rationale |
 | :--- | :--- | :--- | :--- |
-| `ROUTING_CONNECTIVITY_ISSUE` | `REROUTE` | `ADJUST_RETRY_TIMING`, `SUPPRESS_RETRIES` | Switches failing gateway provider to an alternate healthy partner. |
-| `BIN_LEVEL_TEMPORARY_ISSUE` | `ADJUST_RETRY_TIMING` | `REROUTE`, `SUPPRESS_RETRIES` | Applies jittered backoff for rate/velocity throttles on card BINs. |
-| `ISSUER_SIDE_DECLINE` | `SUPPRESS_RETRIES` | `REROUTE`, `ADJUST_RETRY_TIMING` | Halts immediate retries to prevent customer account lockouts and fee churn. |
-| `INSUFFICIENT_SIGNAL` | `SUPPRESS_RETRIES` | `REROUTE`, `ADJUST_RETRY_TIMING` | Diffuse, ambiguous failure codes are not eligible for automated routing changes. |
+| `ROUTING_CONNECTIVITY_ISSUE` | `REROUTE`, `PROVIDER_WEIGHT_ADJUSTMENT`, `INTELLIGENT_RETRY` | `SUPPRESS_RETRIES` | Switches failing gateway or reallocates gateway traffic weights away from degraded processor. |
+| `BIN_LEVEL_TEMPORARY_ISSUE` | `ADJUST_RETRY_TIMING`, `INTELLIGENT_RETRY`, `PAYMENT_METHOD_FALLBACK` | `REROUTE`, `SUPPRESS_RETRIES` | Applies jittered backoff or prompts customer to switch payment method during BIN throttle. |
+| `ISSUER_SIDE_DECLINE` | `SUPPRESS_RETRIES`, `PAYMENT_METHOD_FALLBACK` | `REROUTE`, `PROVIDER_WEIGHT_ADJUSTMENT` | Prevents repeated issuer charges; prompts alternate instrument if card limits hit. |
+| `INSUFFICIENT_SIGNAL` | `SUPPRESS_RETRIES` (Safe hold) | `REROUTE`, `ADJUST_RETRY_TIMING`, `PROVIDER_WEIGHT_ADJUSTMENT` | Ambiguous noise is never routed automatically without statistical significance. |
 
 Any request attempting an incompatible action is rejected with `HTTP 422 Unprocessable Content`.
+
+---
+
+## 2.1 Customer-Level Retry Safety & Friction Scoring (`app/customer_safety.py`)
+
+To protect end-cardholders from fatigue, bank account lockouts, and unnecessary fraud alerts:
+- **Anonymized Identifiers:** Cardholders are tracked via anonymized tokens (`CUST_1042`, `CUST_2081`) without storing PII.
+- **Hard Per-Customer Cap:** Maximum 2 recovery retries per customer across all active incident windows.
+- **Enforced Cooldowns:** Minimum 15-minute cooldown between automated retry attempts on identical payment credentials.
+- **Friction Index:** Calculates customer friction risk (0-100). When friction exceeds 60, automated retries are suppressed and the system surfaces an organic checkout fallback.
+
+---
+
+## 2.2 Closed-Loop Learning Non-Bypass Invariant
+
+DeclineDoctor incorporates a closed-loop outcome feedback loop (`app/learning.py`), with strict architectural separation:
+- **What Learning Can Modify:** Recommendation ranking, expected percentage lift, and diagnostic confidence modifiers ($\pm 0.05$).
+- **What Learning CANNOT Modify:** Revenue floors (₹50k), auto-approval ceilings (₹500k), role authorizations (ADMIN/OPERATOR only), retry caps ($\le 2$), or terminal state immutability.
+- **Safety Invariant:** A recovery action can never be automatically executed solely because historical learning was favorable if any policy gate fails.
 
 ---
 

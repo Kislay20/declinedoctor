@@ -185,10 +185,10 @@ def trigger_recovery(
 
 
 @router.get("/{id}/counterfactuals")
-def get_incident_counterfactuals(id: str, db: Session = Depends(get_db)):
-    """Retrieve counterfactual projections for REROUTE, ADJUST_RETRY_TIMING, and SUPPRESS_RETRIES."""
+def get_incident_counterfactuals(id: str, extended: bool = False, db: Session = Depends(get_db)):
+    """Retrieve counterfactual projections for candidate recovery actions."""
     try:
-        return compute_counterfactuals(db, id)
+        return compute_counterfactuals(db, id, include_extended=extended)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

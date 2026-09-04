@@ -81,9 +81,18 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         else 0.0
     )
 
-    # 5. Revenue Recovery Funnel (Phase 6)
-    # AT RISK -> DIAGNOSED -> ELIGIBLE -> RECOVERED
+    # 5. Revenue Recovery Funnel (Phase 6 & 12)
+    # PAYMENTS -> FAILED PAYMENTS -> AT RISK -> DIAGNOSED -> ELIGIBLE -> RECOVERED -> NET RECOVERED
     funnel_at_risk = total_at_risk_all
+
+    from ..economics import calculate_recovery_economics
+    economics = calculate_recovery_economics(
+        gross_recovered=recovered_rev,
+        transactions_recovered=transactions_flipped,
+    )
+
+    total_payments_vol = round(sum(t.amount for t in txns), 2)
+    failed_payments_vol = round(sum(t.amount for t in txns if not t.success), 2)
 
     # Diagnosed revenue: sum at-risk revenue for incidents with a Diagnosis record
     diagnosed_incident_ids = {d.incident_id for d in db.query(Diagnosis.incident_id).all()}
@@ -149,13 +158,18 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         "stopped_incidents": stopped_incidents,
         "human_approvals_granted": human_approvals_granted,
         "average_recovery_improvement_pp": avg_improvement,
-        # Revenue Funnel (Phase 6)
+        # Revenue Funnel (Phase 6 & 12)
         "funnel": {
+            "total_payments_volume": total_payments_vol,
+            "total_failed_volume": failed_payments_vol,
             "at_risk": round(funnel_at_risk, 2),
             "diagnosed": round(funnel_diagnosed, 2),
             "eligible": round(funnel_eligible, 2),
             "recovered": round(funnel_recovered, 2),
+            "net_recovered": round(economics["net_recovered_revenue"], 2),
         },
+        # Recovery Economics
+        "recovery_economics": economics,
         # Approval Queue (Phase 7)
         "approval_queue": approval_queue,
     }

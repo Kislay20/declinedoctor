@@ -87,6 +87,10 @@ def diagnose_incident(db: Session, incident_id: str):
     incident.severity = severity
 
     # Construct Evidence JSON
+    sample_network = next((f.card_network for f in failures if f.card_network), "Visa") if incident.segment_payment_method == "card" else None
+    timeout_failures = sum(1 for f in failures if "timeout" in (f.decline_code or "").lower())
+    timeout_rate = (timeout_failures / len(failures)) if failures else 0.0
+
     evidence_dict = {
         "incident_id": incident.id,
         "window": {
@@ -95,7 +99,9 @@ def diagnose_incident(db: Session, incident_id: str):
         },
         "segment": {
             "issuer": incident.segment_issuer,
-            "payment_method": incident.segment_payment_method
+            "payment_method": incident.segment_payment_method,
+            "card_network": sample_network,
+            "geography": "IN / Domestic",
         },
         "baseline_success_rate": round(incident.baseline_success_rate, 2),
         "incident_success_rate": round(incident.incident_success_rate, 2),
@@ -107,7 +113,14 @@ def diagnose_incident(db: Session, incident_id: str):
         "at_risk_revenue": round(at_risk_revenue, 2),
         "severity": severity,
         "hypothesis": hypothesis,
-        "confidence": rounded_conf
+        "confidence": rounded_conf,
+        "timeout_rate": round(timeout_rate, 2),
+        "avg_transaction_amount": round(at_risk_revenue / len(failures), 2) if failures else 0.0,
+        "provider_context": {
+            "gateway": "Razorpay Smart Router",
+            "active_mode": "TEST_SANDBOX",
+            "provider_status": "HEALTHY",
+        },
     }
 
     # Update state only if not already terminal

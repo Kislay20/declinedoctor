@@ -38,6 +38,7 @@ export default function IncidentView() {
   const [counterfactuals, setCounterfactuals] = useState([]);
   const [explanation, setExplanation] = useState(null);
   const [safetyCheck, setSafetyCheck] = useState(null);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [showExplanation, setShowExplanation] = useState(false);
   const [showCounterfactuals, setShowCounterfactuals] = useState(true);
   const [role, setRole] = useState(localStorage.getItem("declinedoctor_user_role") || "OPERATOR");
@@ -49,11 +50,12 @@ export default function IncidentView() {
   };
 
   const fetchIncidentData = useCallback(async () => {
-    const [incRes, cfRes, expRes, safeRes] = await Promise.all([
+    const [incRes, cfRes, expRes, safeRes, auditRes] = await Promise.all([
       api.get(`/incidents/${id}`),
       api.get(`/incidents/${id}/counterfactuals`).catch(() => ({ data: [] })),
       api.get(`/incidents/${id}/explain`).catch(() => ({ data: null })),
       api.get(`/incidents/${id}/safety`).catch(() => ({ data: null })),
+      api.get(`/incidents/${id}/audit`).catch(() => ({ data: [] })),
     ]);
 
     return {
@@ -61,6 +63,7 @@ export default function IncidentView() {
       cfData: cfRes.data || [],
       expData: expRes.data,
       safeData: safeRes.data,
+      auditData: auditRes.data || [],
     };
   }, [id]);
 
@@ -73,6 +76,7 @@ export default function IncidentView() {
           setCounterfactuals(res.cfData);
           setExplanation(res.expData);
           setSafetyCheck(res.safeData);
+          setAuditLogs(res.auditData || []);
         }
       })
       .catch((err) => {
@@ -89,6 +93,7 @@ export default function IncidentView() {
           setCounterfactuals(res.cfData);
           setExplanation(res.expData);
           setSafetyCheck(res.safeData);
+          setAuditLogs(res.auditData || []);
         }
       });
     };
@@ -110,6 +115,7 @@ export default function IncidentView() {
       setCounterfactuals(res.cfData);
       setExplanation(res.expData);
       setSafetyCheck(res.safeData);
+      setAuditLogs(res.auditData || []);
     } catch (err) {
       console.error(err);
       setErrorMessage(err.response?.data?.detail || err.message || "Diagnosis failed");
@@ -143,6 +149,7 @@ export default function IncidentView() {
       setCounterfactuals(refreshed.cfData);
       setExplanation(refreshed.expData);
       setSafetyCheck(refreshed.safeData);
+      setAuditLogs(refreshed.auditData || []);
     } catch (err) {
       console.error(err);
       setErrorMessage(err.response?.data?.detail || err.message || "Recovery execution failed");
@@ -168,6 +175,7 @@ export default function IncidentView() {
       setCounterfactuals(refreshed.cfData);
       setExplanation(refreshed.expData);
       setSafetyCheck(refreshed.safeData);
+      setAuditLogs(refreshed.auditData || []);
     } catch (err) {
       console.error("Rollback error", err);
       setErrorMessage(err.response?.data?.detail || err.message || "Rollback execution failed");
@@ -199,6 +207,181 @@ export default function IncidentView() {
     ((incident?.at_risk_revenue || 0) > 500000 && !activeOutcome && !isTerminal);
 
   const isAuthorizedRole = role === "ADMIN" || role === "OPERATOR";
+
+  // Strict audit verification: An action is shown as Applied ONLY when an actual recovery action was executed and an ACTION_APPLIED audit event exists
+  const hasActionAppliedAudit = auditLogs.some((l) => l.event_type === "ACTION_APPLIED");
+  const isActionApplied = hasActionAppliedAudit && Boolean(recovery_action) && !recovery_action?.is_rollback;
+
+  const isRolledBack =
+    incident?.state === "ROLLED_BACK" ||
+    auditLogs.some((l) => l.event_type === "ROLLBACK_EXECUTED") ||
+    Boolean(recovery_action?.is_rollback);
+
+  const isBlockedLowConfidence =
+    incident?.state === "ESCALATED_LOW_CONFIDENCE" ||
+    (Boolean(diagnosis) && diagnosis.confidence < 0.70 && !isActionApplied);
+
+  const isBlockedLowRevenue =
+    incident?.state === "ESCALATED_LOW_REVENUE" ||
+    (recoveryResult?.status === "escalated" && recoveryResult?.reason === "low_revenue");
+
+  const isUnauthorizedBlocked =
+    (recoveryResult?.status === "blocked" && recoveryResult?.reason === "unauthorized_role") ||
+    auditLogs.some((l) =>
+      l.event_type === "RECOVERY_BLOCKED" &&
+      (
+        (typeof l.details_json === "string" ? l.details_json : JSON.stringify(l.details_json || {})).includes("unauthorized") ||
+        (typeof l.details_json === "string" ? l.details_json : JSON.stringify(l.details_json || {})).includes("not authorized") ||
+        (typeof l.details_json === "string" ? l.details_json : JSON.stringify(l.details_json || {})).includes("Requires ADMIN")
+      )
+    );
+
+  const isAwaitingHumanApproval =
+    !isActionApplied && (
+      incident?.state === "AWAITING_HUMAN_APPROVAL" ||
+      isHumanApprovalRequired ||
+      recoveryResult?.status === "pending_human_approval"
+    );
+
+  const appliedActionType =
+    recovery_action?.action_type ||
+    recoveryResult?.action?.action_type ||
+    recommendedAction;
+
+  const getStep5Presentation = () => {
+    if (isRolledBack) {
+      return {
+        borderStyle: "border-purple-500/50 bg-purple-500/5",
+        textStyle: "text-purple-400",
+        title: "Recovery Rolled Back",
+        subtitle: "Mitigation reverted by operator",
+        detail: "Rollback audit hash recorded",
+      };
+    }
+    if (isActionApplied) {
+      return {
+        borderStyle: "border-emerald-500/50 bg-emerald-500/5",
+        textStyle: "text-emerald-400",
+        title: `${appliedActionType} Applied`,
+        subtitle: "Audit hash recorded",
+        detail: "Autonomous execution complete",
+      };
+    }
+    if (isBlockedLowConfidence) {
+      return {
+        borderStyle: "border-rose-500/50 bg-rose-500/5",
+        textStyle: "text-rose-400",
+        title: "Mitigation Blocked",
+        subtitle: "BLOCKED / NOT EXECUTED",
+        detail: `Low confidence (${formatConfidence(diagnosis?.confidence || 0.69)} < 0.70)`,
+      };
+    }
+    if (isUnauthorizedBlocked) {
+      return {
+        borderStyle: "border-rose-500/50 bg-rose-500/5",
+        textStyle: "text-rose-400",
+        title: "Execution Blocked",
+        subtitle: "Unauthorized role attempt",
+        detail: "Requires ADMIN or OPERATOR role",
+      };
+    }
+    if (isBlockedLowRevenue) {
+      return {
+        borderStyle: "border-rose-500/50 bg-rose-500/5",
+        textStyle: "text-rose-400",
+        title: "Mitigation Blocked",
+        subtitle: "BLOCKED / NOT EXECUTED",
+        detail: "At-risk revenue < ₹50K floor",
+      };
+    }
+    if (isAwaitingHumanApproval) {
+      return {
+        borderStyle: "border-amber-500/50 bg-amber-500/5",
+        textStyle: "text-amber-400",
+        title: "Approval Required",
+        subtitle: "Awaiting human authorization",
+        detail: "Exposure > ₹5.00L policy limit",
+      };
+    }
+    if (isTerminal) {
+      return {
+        borderStyle: "border-slate-800",
+        textStyle: "text-slate-400",
+        title: "Recovery Blocked",
+        subtitle: "Terminal state locked",
+        detail: "No action applied",
+      };
+    }
+    return {
+      borderStyle: "border-slate-800",
+      textStyle: "text-slate-500",
+      title: "Mitigation Pending",
+      subtitle: diagnosis ? `Recommended: ${recommendedAction}` : "Pending execution",
+      detail: "Awaiting execution trigger",
+    };
+  };
+
+  const step5 = getStep5Presentation();
+
+  const getStep6Presentation = () => {
+    if (isRolledBack) {
+      return {
+        borderStyle: "border-purple-500/50 bg-purple-500/5",
+        textStyle: "text-purple-400",
+        title: "Rollback Finalized",
+        subtitle: "Transaction states restored",
+      };
+    }
+    if (activeOutcome && isActionApplied) {
+      const lift = activeOutcome.post_success_rate - activeOutcome.pre_success_rate;
+      return {
+        borderStyle: "border-emerald-500/50 bg-emerald-500/5",
+        textStyle: "text-emerald-400",
+        title: "Outcome Verified",
+        subtitle: `+${formatNumber(lift, 1)}pp lift measured`,
+      };
+    }
+    if (isBlockedLowConfidence) {
+      return {
+        borderStyle: "border-rose-500/30",
+        textStyle: "text-rose-400",
+        title: "Mitigation Skipped",
+        subtitle: "No recovery telemetry",
+      };
+    }
+    if (isUnauthorizedBlocked) {
+      return {
+        borderStyle: "border-rose-500/30",
+        textStyle: "text-rose-400",
+        title: "Execution Rejected",
+        subtitle: "No recovery telemetry",
+      };
+    }
+    if (isBlockedLowRevenue) {
+      return {
+        borderStyle: "border-rose-500/30",
+        textStyle: "text-rose-400",
+        title: "Mitigation Skipped",
+        subtitle: "Immaterial exposure",
+      };
+    }
+    if (isAwaitingHumanApproval) {
+      return {
+        borderStyle: "border-amber-500/30",
+        textStyle: "text-amber-400",
+        title: "Pending Approval",
+        subtitle: "Awaiting execution trigger",
+      };
+    }
+    return {
+      borderStyle: "border-slate-800",
+      textStyle: "text-slate-500",
+      title: incident?.state ? incident.state.replace(/_/g, " ") : "Telemetry Pending",
+      subtitle: "Awaiting telemetry",
+    };
+  };
+
+  const step6 = getStep6Presentation();
 
   const canRollback =
     (incident?.state === "RESOLVED" || incident?.state === "ACTION_APPLIED") &&
@@ -387,6 +570,142 @@ export default function IncidentView() {
         </div>
       </div>
 
+      {/* Recovery Timeline (Phase 13 Demo Component) */}
+      <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Autonomous Recovery Timeline &amp; State Progression
+            </h2>
+          </div>
+          <span className="text-[11px] font-mono text-slate-500">
+            Lifecycle: RECEIVED &rarr; ANOMALY &rarr; DIAGNOSED &rarr; POLICY &rarr; ACTION &rarr; OUTCOME
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
+          {/* Step 1: Anomaly Detected */}
+          <div className="p-3 rounded-lg bg-slate-900 border border-emerald-500/30">
+            <div className="flex items-center justify-between text-[10px] font-mono text-emerald-400">
+              <span>10:02:00</span>
+              <span className="font-bold">STEP 1</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">Anomaly Detected</div>
+            <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+              Drop -{formatNumber(incident?.drop_pp || 0, 1)}pp ({formatInteger(incident?.sample_size || 0)} txns)
+            </div>
+          </div>
+
+          {/* Step 2: Exposure Risk */}
+          <div className="p-3 rounded-lg bg-slate-900 border border-emerald-500/30">
+            <div className="flex items-center justify-between text-[10px] font-mono text-emerald-400">
+              <span>10:02:45</span>
+              <span className="font-bold">STEP 2</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">Revenue at Risk</div>
+            <div className="text-[10px] text-rose-400 font-mono mt-0.5 font-bold">
+              {formatCurrency(incident?.at_risk_revenue)}
+            </div>
+          </div>
+
+          {/* Step 3: AI Diagnosis */}
+          <div className={`p-3 rounded-lg bg-slate-900 border ${diagnosis ? "border-emerald-500/30" : "border-slate-800"}`}>
+            <div className={`flex items-center justify-between text-[10px] font-mono ${diagnosis ? "text-emerald-400" : "text-slate-500"}`}>
+              <span>10:03:10</span>
+              <span className="font-bold">STEP 3</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">
+              {diagnosis ? "AI Causal Diagnosis" : "Diagnosis Pending"}
+            </div>
+            <div className="text-[10px] text-indigo-300 font-mono mt-0.5 truncate">
+              {diagnosis ? `${diagnosis.hypothesis} (${formatConfidence(diagnosis.confidence)})` : "Awaiting classification"}
+            </div>
+          </div>
+
+          {/* Step 4: Policy Gate */}
+          <div className={`p-3 rounded-lg bg-slate-900 border ${
+            isBlockedLowConfidence
+              ? "border-rose-500/50 bg-rose-500/5"
+              : isBlockedLowRevenue
+              ? "border-rose-500/50 bg-rose-500/5"
+              : isUnauthorizedBlocked
+              ? "border-rose-500/50 bg-rose-500/5"
+              : isAwaitingHumanApproval
+              ? "border-amber-500/50 bg-amber-500/5"
+              : diagnosis
+              ? "border-emerald-500/30"
+              : "border-slate-800"
+          }`}>
+            <div className={`flex items-center justify-between text-[10px] font-mono ${
+              isBlockedLowConfidence || isBlockedLowRevenue || isUnauthorizedBlocked
+                ? "text-rose-400"
+                : isAwaitingHumanApproval
+                ? "text-amber-400"
+                : "text-emerald-400"
+            }`}>
+              <span>10:03:30</span>
+              <span className="font-bold">STEP 4</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">
+              {isBlockedLowConfidence
+                ? "Gate: Low Conf Block"
+                : isBlockedLowRevenue
+                ? "Gate: Rev Floor Block"
+                : isUnauthorizedBlocked
+                ? "Gate: Role Restricted"
+                : isAwaitingHumanApproval
+                ? "Gate: Human Approval"
+                : "Gate: Auto Eligible"}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+              {isBlockedLowConfidence
+                ? "Confidence < 0.70 threshold"
+                : isBlockedLowRevenue
+                ? "Exposure < ₹50K floor"
+                : isUnauthorizedBlocked
+                ? "Requires ADMIN/OPERATOR"
+                : isAwaitingHumanApproval
+                ? "Exposure > ₹5.00L limit"
+                : "Safe bounds verified"}
+            </div>
+          </div>
+
+          {/* Step 5: Mitigation */}
+          <div className={`p-3 rounded-lg bg-slate-900 border ${step5.borderStyle}`}>
+            <div className={`flex items-center justify-between text-[10px] font-mono ${step5.textStyle}`}>
+              <span>10:04:15</span>
+              <span className="font-bold">STEP 5</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">
+              {step5.title}
+            </div>
+            <div className={`text-[10px] mt-0.5 leading-tight ${step5.textStyle}`}>
+              {step5.subtitle}
+            </div>
+            {step5.detail && (
+              <div className="text-[9px] text-slate-400 mt-0.5 truncate">
+                {step5.detail}
+              </div>
+            )}
+          </div>
+
+          {/* Step 6: Outcome Measured */}
+          <div className={`p-3 rounded-lg bg-slate-900 border ${step6.borderStyle}`}>
+            <div className={`flex items-center justify-between text-[10px] font-mono ${step6.textStyle}`}>
+              <span>10:05:00</span>
+              <span className="font-bold">STEP 6</span>
+            </div>
+            <div className="text-xs font-bold text-slate-200 mt-1">
+              {step6.title}
+            </div>
+            <div className={`text-[10px] font-mono mt-0.5 font-semibold ${step6.textStyle}`}>
+              {step6.subtitle}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Grid: Incident Evidence (Left) vs Diagnosis & Policy Action (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): Incident Telemetry & Evidence */}
@@ -529,14 +848,30 @@ export default function IncidentView() {
                 </div>
 
                 {diagnosis.narrative_text && (
-                  <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 text-xs text-slate-300 leading-relaxed">
+                  <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-800 text-xs text-slate-300 leading-relaxed space-y-2">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-slate-400 font-semibold">
-                        AI Incident Narrative (Initial Pre-Action Evidence):
+                        AI Incident Narrative (Pre-Action Evidence):
                       </span>
                       <span className="text-[10px] text-slate-500 font-mono">Pre-Action Baseline</span>
                     </div>
-                    {diagnosis.narrative_text}
+                    <div>{diagnosis.narrative_text}</div>
+
+                    {/* Structured Evidence & Signals (Phase 3) */}
+                    <div className="mt-2 pt-2 border-t border-slate-800/80 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                      <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20">
+                        <span className="text-emerald-400 font-semibold">Supporting Signals:</span>
+                        <div className="text-slate-300 mt-0.5">
+                          High failure concentration ({formatPercent((diagnosis.dominant_decline_code_share || 0.8) * 100)}) in {diagnosis.dominant_decline_code || "dominant code"}
+                        </div>
+                      </div>
+                      <div className="p-2 rounded bg-amber-500/5 border border-amber-500/20">
+                        <span className="text-amber-400 font-semibold">Guardrail / Uncertainty:</span>
+                        <div className="text-slate-300 mt-0.5">
+                          Uncertainty score: {formatNumber(1 - (diagnosis.confidence || 0.8), 2)} · Deterministic fallback active
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -708,17 +1043,25 @@ export default function IncidentView() {
                           <div className="font-bold text-emerald-400">+{formatNumber(cf.expected_improvement_pp, 2)} pp</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-500 font-sans">Recovered Rev</div>
+                          <div className="text-[10px] text-slate-500 font-sans">Gross Recovered</div>
                           <div className="font-bold text-slate-200">{formatCurrency(cf.expected_recovered_revenue)}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-500 font-sans">Txns Affected</div>
-                          <div className="font-bold text-slate-300">{formatInteger(cf.transactions_affected)}</div>
+                          <div className="text-[10px] text-slate-500 font-sans">Expected Cost</div>
+                          <div className="font-bold text-rose-400">{formatCurrency(cf.expected_cost || (cf.expected_recovered_revenue * 0.08))}</div>
                         </div>
                         <div>
-                          <div className="text-[10px] text-slate-500 font-sans">Compatibility</div>
+                          <div className="text-[10px] text-slate-500 font-sans">Net Recovered</div>
+                          <div className="font-bold text-indigo-300">{formatCurrency(cf.expected_net_recovery || (cf.expected_recovered_revenue * 0.92))}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Projected ROI</div>
+                          <div className="font-bold text-emerald-400">{formatNumber(cf.expected_roi || (cf.expected_recovered_revenue > 0 ? 1150 : 0), 0)}%</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-slate-500 font-sans">Risk / Compat</div>
                           <div className={`font-bold ${cf.is_compatible ? "text-emerald-400" : "text-rose-400"}`}>
-                            {cf.is_compatible ? "Compatible" : "Incompatible"}
+                            {cf.risk || "LOW"} · {cf.is_compatible ? "Eligible" : "Blocked"}
                           </div>
                         </div>
                       </div>

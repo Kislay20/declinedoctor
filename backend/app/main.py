@@ -2,7 +2,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
-from .routes import dashboard, incidents, simulate, segments, evaluation, observability
+from .routes import dashboard, incidents, simulate, segments, evaluation, observability, providers
 from .observability import record_request_latency
 
 # Ensure tables are created (fallback)
@@ -40,6 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .routes import dashboard, incidents, simulate, segments, evaluation, observability, providers, learning, experiments
+
 # Register routes
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(incidents.router, prefix="/api/incidents", tags=["Incidents"])
@@ -47,6 +49,9 @@ app.include_router(simulate.router, prefix="/api/simulate", tags=["Simulation"])
 app.include_router(segments.router, tags=["Segments"])
 app.include_router(evaluation.router, tags=["Evaluation"])
 app.include_router(observability.router, tags=["Observability"])
+app.include_router(providers.router, tags=["Providers"])
+app.include_router(learning.router, tags=["Learning"])
+app.include_router(experiments.router, tags=["Experiments"])
 
 
 @app.get("/api/health")

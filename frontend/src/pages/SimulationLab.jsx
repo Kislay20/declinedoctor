@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Sliders,
   Play,
@@ -9,6 +9,11 @@ import {
   RefreshCw,
   TrendingUp,
   Zap,
+  Users,
+  BarChart2,
+  ShieldAlert,
+  Award,
+  Clock,
 } from "lucide-react";
 import api from "../api";
 import {
@@ -19,7 +24,7 @@ import {
 } from "../utils/format";
 
 export default function SimulationLab() {
-  const [tab, setTab] = useState("sandbox"); // 'sandbox' | 'streaming'
+  const [tab, setTab] = useState("sandbox"); // 'sandbox' | 'streaming' | 'experiments' | 'customers'
 
   // Sandbox State
   const [issuer, setIssuer] = useState("Bank X");
@@ -42,6 +47,54 @@ export default function SimulationLab() {
   const [autoRecover, setAutoRecover] = useState(false);
   const [streamLoading, setStreamLoading] = useState(false);
   const [streamTrace, setStreamTrace] = useState(null);
+
+  // Experiments State (Phase 6)
+  const [experimentData, setExperimentData] = useState(null);
+  const [loadingExp, setLoadingExp] = useState(false);
+
+  // Customers State (Phase 8)
+  const [customers, setCustomers] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (tab === "experiments" && !experimentData) {
+      api.get("/experiments/summary")
+        .then((res) => {
+          if (isMounted) setExperimentData(res.data);
+        })
+        .catch((err) => console.error("Experiment fetch error", err));
+    } else if (tab === "customers" && customers.length === 0) {
+      api.get("/simulate/customers")
+        .then((res) => {
+          if (isMounted) setCustomers(res.data);
+        })
+        .catch((err) => console.error("Customer fetch error", err));
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [tab, experimentData, customers.length]);
+
+  const handleRunExperiment = async () => {
+    setLoadingExp(true);
+    try {
+      const res = await api.post("/experiments/run", {
+        strategy_a: "REROUTE",
+        strategy_b: "ADJUST_RETRY_TIMING",
+        candidate_action_a: "REROUTE",
+        candidate_action_b: "ADJUST_RETRY_TIMING",
+        sample_size: 100,
+        segment: `${issuer} ${paymentMethod}`,
+        segment_issuer: issuer,
+        segment_payment_method: paymentMethod,
+      });
+      setExperimentData(res.data);
+    } catch (err) {
+      console.error("Experiment run error", err);
+    } finally {
+      setLoadingExp(false);
+    }
+  };
 
   const handleRunSimulation = async () => {
     setLoadingSim(true);
@@ -101,7 +154,7 @@ export default function SimulationLab() {
         </div>
 
         {/* Tab Toggle */}
-        <div className="flex bg-slate-900 border border-slate-800 p-1 rounded-lg self-start">
+        <div className="flex flex-wrap bg-slate-900 border border-slate-800 p-1 rounded-lg self-start gap-1">
           <button
             onClick={() => setTab("sandbox")}
             className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${
@@ -110,7 +163,7 @@ export default function SimulationLab() {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Policy & Recovery Sandbox
+            Policy &amp; Recovery Sandbox
           </button>
           <button
             onClick={() => setTab("streaming")}
@@ -121,6 +174,26 @@ export default function SimulationLab() {
             }`}
           >
             <Radio className="w-3.5 h-3.5" /> Event Stream Mode
+          </button>
+          <button
+            onClick={() => setTab("experiments")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition ${
+              tab === "experiments"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <BarChart2 className="w-3.5 h-3.5" /> Recovery Experiments
+          </button>
+          <button
+            onClick={() => setTab("customers")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition ${
+              tab === "customers"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" /> Customer Retry Safety
           </button>
         </div>
       </div>
@@ -424,7 +497,7 @@ export default function SimulationLab() {
             )}
           </div>
         </div>
-      ) : (
+      ) : tab === "streaming" ? (
         /* Event Stream Mode */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
@@ -554,12 +627,271 @@ export default function SimulationLab() {
                     </div>
                   </div>
                 )}
+
+                {/* 9-Stage Event Lifecycle Trace (Phase 2) */}
+                {streamTrace.pipeline_trace && streamTrace.pipeline_trace.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <div className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-indigo-400" /> 9-Stage Event Pipeline Trace:
+                    </div>
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                      {streamTrace.pipeline_trace.map((step, idx) => (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded bg-black/40 border border-slate-800/80 flex items-start justify-between text-xs font-mono"
+                        >
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-500 text-[10px]">{step.timestamp}</span>
+                              <span className="font-bold text-indigo-300">{step.stage}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-300 font-sans">{step.details}</div>
+                          </div>
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-bold">
+                            {step.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-12 text-center text-slate-500 border border-dashed border-slate-800 rounded-xl">
                 Emit an event to see the step-by-step pipeline execution trace.
               </div>
             )}
+          </div>
+        </div>
+      ) : tab === "experiments" ? (
+        /* Recovery Strategy Experiment Lab (Phase 6) */
+        <div className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#151822] border border-slate-800 p-5 rounded-xl">
+            <div>
+              <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
+                <BarChart2 className="w-5 h-5 text-indigo-400" /> Recovery Strategy Experiment (Cohort A vs B)
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Deterministic simulation comparing recovery actions on identical failure distributions. Live customer traffic is never partitioned.
+              </p>
+            </div>
+            <button
+              onClick={handleRunExperiment}
+              disabled={loadingExp}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loadingExp ? "animate-spin" : ""}`} />
+              Run New Experiment (N=100)
+            </button>
+          </div>
+
+          {experimentData && (
+            <div className="space-y-4">
+              {/* Winner Banner */}
+              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Award className="w-6 h-6 text-emerald-400 flex-shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                      Statistical Winner: {experimentData.winner}
+                    </div>
+                    <div className="text-xs text-slate-300 mt-0.5">
+                      {experimentData.recommendation_rationale}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-mono">
+                  <span className="px-2 py-1 rounded bg-black/40 text-emerald-400 border border-emerald-500/20">
+                    p-value: {experimentData.p_value}
+                  </span>
+                  <span className="px-2 py-1 rounded bg-black/40 text-slate-200 border border-slate-800">
+                    Confidence: {experimentData.confidence_level_pct}%
+                  </span>
+                </div>
+              </div>
+
+              {/* Side-by-Side Comparison Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Cohort A */}
+                <div className="bg-[#151822] border border-indigo-500/40 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <span className="text-xs font-bold font-mono text-indigo-300">
+                      COHORT A: {experimentData.cohort_a?.strategy || experimentData.cohort_a?.action || "REROUTE"}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      N = {experimentData.cohort_size || experimentData.cohort_a?.sample_count} txns
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Recovery Rate</div>
+                      <div className="text-base font-bold text-emerald-400 mt-0.5">
+                        {experimentData.cohort_a?.recovery_rate_pct}%
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Average Lift</div>
+                      <div className="text-base font-bold text-indigo-300 mt-0.5">
+                        +{experimentData.cohort_a?.average_lift_pp ?? experimentData.cohort_a?.avg_lift_pp} pp
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Recovered Revenue</div>
+                      <div className="text-base font-bold text-slate-200 mt-0.5">
+                        {formatCurrency(experimentData.cohort_a?.net_recovered_revenue ?? experimentData.cohort_a?.recovered_revenue ?? experimentData.cohort_a?.gross_recovered_revenue)}
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Friction Score</div>
+                      <div className="text-base font-bold text-slate-300 mt-0.5">
+                        {experimentData.cohort_a?.friction_score ?? experimentData.cohort_a?.customer_friction_score} / 100
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Cohort B */}
+                <div className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <span className="text-xs font-bold font-mono text-amber-300">
+                      COHORT B: {experimentData.cohort_b?.strategy || experimentData.cohort_b?.action || "ADJUST_RETRY_TIMING"}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      N = {experimentData.cohort_size || experimentData.cohort_b?.sample_count} txns
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Recovery Rate</div>
+                      <div className="text-base font-bold text-emerald-400 mt-0.5">
+                        {experimentData.cohort_b?.recovery_rate_pct}%
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Average Lift</div>
+                      <div className="text-base font-bold text-amber-300 mt-0.5">
+                        +{experimentData.cohort_b?.average_lift_pp ?? experimentData.cohort_b?.avg_lift_pp} pp
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Recovered Revenue</div>
+                      <div className="text-base font-bold text-slate-200 mt-0.5">
+                        {formatCurrency(experimentData.cohort_b?.net_recovered_revenue ?? experimentData.cohort_b?.recovered_revenue ?? experimentData.cohort_b?.gross_recovered_revenue)}
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800">
+                      <div className="text-[10px] text-slate-400 font-sans">Friction Score</div>
+                      <div className="text-base font-bold text-slate-300 mt-0.5">
+                        {experimentData.cohort_b?.friction_score ?? experimentData.cohort_b?.customer_friction_score} / 100
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg bg-black/30 border border-slate-800 text-[11px] text-slate-500">
+                {experimentData.simulation_disclaimer}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Customer Retry Safety & Cooldowns (Phase 8) */
+        <div className="space-y-4">
+          <div className="bg-[#151822] border border-slate-800 p-5 rounded-xl">
+            <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-rose-400" /> Customer-Level Recovery Safety Guardrails
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Zero PII exposure. Anonymized customer identifiers enforce retry caps and cooldowns to prevent customer fatigue and card network penalties.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {(customers.length > 0 ? customers : [
+              {
+                customer_id: "CUST_1042",
+                issuer: "Bank X",
+                payment_method: "card",
+                failed_attempts: 3,
+                retries_used: 2,
+                friction_score: 85.0,
+                cooldown_active: true,
+                safety_status: "LOCKED_MAX_RETRIES",
+                enforced_action: "SUPPRESS_RETRIES",
+              },
+              {
+                customer_id: "CUST_2081",
+                issuer: "HDFC",
+                payment_method: "netbanking",
+                failed_attempts: 1,
+                retries_used: 1,
+                friction_score: 35.0,
+                cooldown_active: false,
+                safety_status: "RETRY_ALLOWED",
+                enforced_action: "INTELLIGENT_RETRY",
+              },
+              {
+                customer_id: "CUST_3190",
+                issuer: "SBI",
+                payment_method: "upi",
+                failed_attempts: 4,
+                retries_used: 2,
+                friction_score: 92.0,
+                cooldown_active: true,
+                safety_status: "LOCKED_COOLDOWN_ACTIVE",
+                enforced_action: "SUPPRESS_RETRIES",
+              },
+            ]).map((cust) => (
+              <div
+                key={cust.customer_id}
+                className="bg-[#151822] border border-slate-800 rounded-xl p-5 space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold font-mono text-slate-200">
+                    {cust.customer_id}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    cust.safety_status.includes("LOCKED")
+                      ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                      : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                  }`}>
+                    {cust.safety_status}
+                  </span>
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  {cust.issuer} · {cust.payment_method.toUpperCase()}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono pt-1">
+                  <div className="p-2 rounded bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 font-sans">Failures</div>
+                    <div className="font-bold text-rose-400 mt-0.5">{cust.failed_attempts}</div>
+                  </div>
+                  <div className="p-2 rounded bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 font-sans">Retries Used</div>
+                    <div className="font-bold text-amber-400 mt-0.5">{cust.retries_used} / 2 limit</div>
+                  </div>
+                  <div className="p-2 rounded bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 font-sans">Friction Score</div>
+                    <div className="font-bold text-slate-200 mt-0.5">{cust.friction_score}</div>
+                  </div>
+                  <div className="p-2 rounded bg-slate-900 border border-slate-800">
+                    <div className="text-[10px] text-slate-500 font-sans">Enforced Action</div>
+                    <div className="font-bold text-indigo-300 mt-0.5">{cust.enforced_action}</div>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-400 pt-2 border-t border-slate-800/80 leading-relaxed">
+                  {cust.retries_used >= 2
+                    ? "Retry cap reached / repeated failure pattern. Automated retries strictly suppressed to protect customer trust."
+                    : "Within safe recovery limits. Single bounded retry eligible."}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

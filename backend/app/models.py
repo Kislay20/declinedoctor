@@ -1,3 +1,4 @@
+import json
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text
 from datetime import datetime
 from .database import Base
@@ -36,6 +37,29 @@ class Incident(Base):
     state = Column(String) # lifecycle/guardrail states including human-approval and escalation terminals
     severity = Column(String, default="MEDIUM") # CRITICAL | HIGH | MEDIUM | LOW
     advanced_stats_json = Column(Text, nullable=True) # EWMA, Z-score, 95% CI, p-value
+
+    def __contains__(self, key):
+        if hasattr(self, key):
+            return True
+        if self.advanced_stats_json:
+            try:
+                stats = json.loads(self.advanced_stats_json) if isinstance(self.advanced_stats_json, str) else self.advanced_stats_json
+                return key in stats
+            except Exception:
+                pass
+        return False
+
+    def __getitem__(self, key):
+        if hasattr(self, key):
+            return getattr(self, key)
+        if self.advanced_stats_json:
+            try:
+                stats = json.loads(self.advanced_stats_json) if isinstance(self.advanced_stats_json, str) else self.advanced_stats_json
+                if key in stats:
+                    return stats[key]
+            except Exception:
+                pass
+        raise KeyError(key)
 
 class Diagnosis(Base):
     __tablename__ = "diagnoses"
@@ -87,3 +111,22 @@ class AuditLog(Base):
     details_json = Column(Text)
     previous_hash = Column(String, nullable=True)
     record_hash = Column(String, nullable=True)
+
+
+class RecoveryLearning(Base):
+    __tablename__ = "recovery_learnings"
+
+    id = Column(String, primary_key=True, index=True)
+    segment = Column(String, index=True)
+    hypothesis = Column(String, index=True)
+    action = Column(String, index=True)
+    predicted_lift = Column(Float)
+    actual_lift = Column(Float)
+    predicted_recovered_revenue = Column(Float)
+    actual_recovered_revenue = Column(Float)
+    transactions_affected = Column(Integer)
+    success = Column(Boolean, default=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    confidence = Column(Float)
+    provider = Column(String)
+    context_json = Column(Text, nullable=True)

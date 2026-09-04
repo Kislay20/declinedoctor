@@ -21,11 +21,14 @@ from .policy import (
     check_recovery_safety,
 )
 
-# Fixed effect-size assumptions from Spec Section 3
+# Fixed effect-size assumptions from Spec Section 3 & Expanded Strategies
 EFFECT_SIZES = {
     "REROUTE": 0.42,
     "ADJUST_RETRY_TIMING": 0.21,
     "SUPPRESS_RETRIES": 0.00,
+    "PAYMENT_METHOD_FALLBACK": 0.35,
+    "INTELLIGENT_RETRY": 0.28,
+    "PROVIDER_WEIGHT_ADJUSTMENT": 0.38,
 }
 
 # Compatibility mapping
@@ -47,11 +50,10 @@ def _at_risk_revenue(db: Session, incident: Incident) -> float:
     return sum(t.amount for t in _incident_transactions(db, incident) if not t.success)
 
 
-def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
-    """Compute genuine expected outcomes for all candidate recovery actions.
+def compute_counterfactuals(db: Session, incident_id: str, include_extended: bool = False) -> List[Dict]:
+    """Compute genuine expected outcomes for candidate recovery actions.
 
-    Evaluates REROUTE, ADJUST_RETRY_TIMING, and SUPPRESS_RETRIES using actual
-    incident transactions and bounded retry caps without hardcoding.
+    Evaluates recovery actions using actual incident transactions and bounded retry caps.
     Maintains a genuine pre-action snapshot to prevent post-recovery distortion.
     """
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
@@ -59,8 +61,8 @@ def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
     if not incident or not diagnosis:
         raise ValueError(f"Incident or Diagnosis not found for id {incident_id}")
 
-    # Return cached pre-action snapshot if already computed
-    if diagnosis.counterfactuals_json:
+    # Return cached pre-action snapshot if already computed and standard mode requested
+    if diagnosis.counterfactuals_json and not include_extended:
         try:
             cached = json.loads(diagnosis.counterfactuals_json)
             if cached and isinstance(cached, list) and len(cached) > 0:
@@ -93,6 +95,15 @@ def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
             "Halts automated retries immediately. Protects merchants from duplicate fees "
             "and customers from account lockouts on hard/terminal declines."
         ),
+        "PAYMENT_METHOD_FALLBACK": (
+            "Offers customer alternate payment method (UPI / Netbanking) upon card issuer decline."
+        ),
+        "INTELLIGENT_RETRY": (
+            "Uses dynamic retry scheduling with randomized exponential backoff and BIN awareness."
+        ),
+        "PROVIDER_WEIGHT_ADJUSTMENT": (
+            "Dynamically re-balances gateway traffic allocation across multiple provider terminals."
+        ),
     }
 
     results = []
@@ -100,7 +111,19 @@ def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
     recommended_for_hypothesis = ACTION_HYPOTHESIS_MAP.get(diagnosis.hypothesis, "SUPPRESS_RETRIES")
     is_low_confidence = (diagnosis.confidence is not None) and (diagnosis.confidence < CONFIDENCE_THRESHOLD)
 
-    for action_type in ["REROUTE", "ADJUST_RETRY_TIMING", "SUPPRESS_RETRIES"]:
+    candidate_actions = [
+        "REROUTE",
+        "ADJUST_RETRY_TIMING",
+        "SUPPRESS_RETRIES",
+    ]
+    if include_extended:
+        candidate_actions.extend([
+            "PAYMENT_METHOD_FALLBACK",
+            "INTELLIGENT_RETRY",
+            "PROVIDER_WEIGHT_ADJUSTMENT",
+        ])
+
+    for action_type in candidate_actions:
         effect_size = EFFECT_SIZES[action_type]
         compatible = is_action_compatible(diagnosis.hypothesis, action_type)
 
@@ -109,6 +132,12 @@ def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
         projected_successes = current_successes + tx_to_flip
         projected_success_rate = (projected_successes / total_txns * 100) if total_txns > 0 else 0.0
         expected_improvement_pp = round(projected_success_rate - pre_success_rate, 2)
+
+        # Recovery Economics: Estimated retry fee is ₹15.0 per attempt
+        retry_unit_cost = 15.0 if action_type != "SUPPRESS_RETRIES" else 0.0
+        expected_cost = round(tx_to_flip * retry_unit_cost, 2)
+        expected_net_recovery = round(max(expected_recovered_revenue - expected_cost, 0.0), 2)
+        expected_roi = round((expected_net_recovery / expected_cost * 100.0), 1) if expected_cost > 0 else 0.0
 
         # Safety policy: Low-confidence incidents (e.g. SBI) NEVER recommend execution
         if is_low_confidence:
@@ -127,6 +156,9 @@ def compute_counterfactuals(db: Session, incident_id: str) -> List[Dict]:
             "transactions_affected": tx_to_flip,
             "total_eligible_failures": total_eligible,
             "expected_recovered_revenue": round(expected_recovered_revenue, 2),
+            "expected_cost": expected_cost,
+            "expected_net_recovery": expected_net_recovery,
+            "expected_roi": expected_roi,
             "projected_success_rate": round(projected_success_rate, 2),
             "expected_improvement_pp": expected_improvement_pp,
             "rationale": rationales.get(action_type, ""),
@@ -299,7 +331,7 @@ def execute_recovery(
     for i in range(transactions_to_flip):
         failures[i].success = True
         flipped_ids.append(failures[i].id)
-        if action_type in {"REROUTE", "ADJUST_RETRY_TIMING"}:
+        if action_type in {"REROUTE", "ADJUST_RETRY_TIMING", "PAYMENT_METHOD_FALLBACK", "INTELLIGENT_RETRY", "PROVIDER_WEIGHT_ADJUSTMENT"}:
             failures[i].retry_count = min(
                 failures[i].retry_count + 1,
                 MAX_SIMULATED_RETRIES,
@@ -341,6 +373,20 @@ def execute_recovery(
     )
     db.add(outcome)
     db.commit()
+
+    # Closed-Loop Learning Hook
+    try:
+        from .learning import record_recovery_learning
+        record_recovery_learning(
+            db=db,
+            incident=incident,
+            recovery_action=recovery_action,
+            outcome=outcome,
+            predicted_lift=float(round(improvement, 2)),
+            predicted_revenue=float(round(recovered_revenue, 2)),
+        )
+    except Exception:
+        pass
 
     log_audit_event(db, incident.id, "system", "OUTCOME_MEASURED", {
         "improvement_pp": round(improvement, 2),

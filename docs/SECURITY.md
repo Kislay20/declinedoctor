@@ -38,8 +38,16 @@ Roles are enforced at the API boundary in `backend/app/policy.py` using `can_app
 
 ---
 
-## 4. Input Validation & Strict Schema Boundaries
+---
 
-- **Extra Field Forbiddance:** The recovery contract `RecoveryRequest` strictly enforces `extra="forbid"`, rejecting unknown parameters, injection attempts, and unexpected flags with HTTP 422.
-- **Allowed Action Enums:** Recommended actions are restricted to `Literal["REROUTE", "ADJUST_RETRY_TIMING", "SUPPRESS_RETRIES"]`.
-- **Numeric Grounding Validation:** LLM output is parsed against evidence numbers. Any hallucinated statistics or unverified financial figures are caught and rejected prior to persistence.
+## 5. Explicit Disablement of Live Money Transactions
+
+- **Zero Live Execution Risk:** The prototype is configured with `is_live_allowed: False`. Under no circumstances can live money transfers, live card debits, or active production merchant account funds be moved by DeclineDoctor.
+- **Provider Sandbox Guard:** Even if live Razorpay credentials are inadvertently supplied, the provider abstraction layer intercepts execution and locks routing probes to test sandbox mode with `"LIVE STRICTLY DISABLED"`.
+
+---
+
+## 6. Customer Privacy & Zero-PII Guarantee
+
+- **Anonymized Customer Identifiers:** Cardholders are represented exclusively via synthetic pseudo-anonymous tokens (`CUST_1042`, `CUST_2081`).
+- **No Sensitive Financial Data:** No Primary Account Numbers (PAN), CVVs, cardholder names, billing addresses, or phone numbers are ingested, stored, or processed by DeclineDoctor.

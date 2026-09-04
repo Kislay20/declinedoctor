@@ -109,7 +109,14 @@ def can_approve_recovery(role: str) -> bool:
 
 
 # Action & Hypothesis Domain Rules
-ALLOWED_ACTIONS = {"REROUTE", "ADJUST_RETRY_TIMING", "SUPPRESS_RETRIES"}
+ALLOWED_ACTIONS = {
+    "REROUTE",
+    "ADJUST_RETRY_TIMING",
+    "SUPPRESS_RETRIES",
+    "PAYMENT_METHOD_FALLBACK",
+    "INTELLIGENT_RETRY",
+    "PROVIDER_WEIGHT_ADJUSTMENT",
+}
 
 ACTION_HYPOTHESIS_MAP = {
     "ROUTING_CONNECTIVITY_ISSUE": "REROUTE",
@@ -118,13 +125,33 @@ ACTION_HYPOTHESIS_MAP = {
     "INSUFFICIENT_SIGNAL": "SUPPRESS_RETRIES",
 }
 
+COMPATIBILITY_MATRIX = {
+    "ROUTING_CONNECTIVITY_ISSUE": {
+        "REROUTE",
+        "PROVIDER_WEIGHT_ADJUSTMENT",
+        "INTELLIGENT_RETRY",
+        "PAYMENT_METHOD_FALLBACK",
+    },
+    "ISSUER_SIDE_DECLINE": {
+        "SUPPRESS_RETRIES",
+        "PAYMENT_METHOD_FALLBACK",
+    },
+    "BIN_LEVEL_TEMPORARY_ISSUE": {
+        "ADJUST_RETRY_TIMING",
+        "INTELLIGENT_RETRY",
+    },
+    "INSUFFICIENT_SIGNAL": {
+        "SUPPRESS_RETRIES",
+    },
+}
+
 
 def is_action_compatible(hypothesis: str, action: str) -> bool:
-    """Verify proposed action matches diagnosis domain rules."""
-    expected = ACTION_HYPOTHESIS_MAP.get(hypothesis)
-    if not expected:
+    """Verify proposed action matches diagnosis domain rules and multi-action compatibility matrix."""
+    allowed = COMPATIBILITY_MATRIX.get(hypothesis)
+    if not allowed:
         return action == "SUPPRESS_RETRIES"
-    return action == expected
+    return action in allowed
 
 
 # Guardrail Constants

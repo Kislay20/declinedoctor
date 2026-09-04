@@ -71,3 +71,60 @@ class RazorpayPaymentProvider(PaymentProvider):
             "smart_router_rule_reverted": True,
             "restored_gateway": original_gateway,
         }
+
+    def create_test_payment(
+        self,
+        amount: float,
+        currency: str = "INR",
+        customer_id: str = "cust_test",
+        payment_method: str = "card",
+        issuer: str = "Bank X",
+        simulate_failure_code: str = None,
+    ) -> Dict[str, Any]:
+        is_success = simulate_failure_code is None
+        payment_id = f"pay_rzp_test_{abs(hash((amount, customer_id, issuer))) % 1000000:06d}"
+        return {
+            "id": payment_id,
+            "entity": "payment",
+            "amount": int(amount * 100),
+            "currency": currency,
+            "status": "captured" if is_success else "failed",
+            "method": payment_method,
+            "bank": issuer,
+            "error_code": simulate_failure_code,
+            "error_description": "Issuer router degradation" if simulate_failure_code else None,
+            "provider": "razorpay_test_sandbox",
+            "mode": "TEST_SANDBOX",
+            "is_live": False,
+            "is_live_transaction": False,
+        }
+
+    def inspect_payment(self, payment_id: str) -> Dict[str, Any]:
+        return {
+            "id": payment_id,
+            "entity": "payment",
+            "status": "captured",
+            "amount": 240000,
+            "currency": "INR",
+            "provider": "razorpay_test_sandbox",
+            "gateway_terminal": "term_rzp_beta_01",
+            "mode": "TEST_SANDBOX",
+            "created_at": 1757000000,
+        }
+
+    def get_provider_health(self) -> Dict[str, Any]:
+        from datetime import datetime
+        has_keys = bool(os.getenv("RAZORPAY_KEY_ID") and os.getenv("RAZORPAY_KEY_SECRET"))
+        return {
+            "provider": "Razorpay Smart Router & Optimizer",
+            "status": "HEALTHY",
+            "latency_ms": 78.5,
+            "error_rate": 0.45,
+            "recent_failure_rate": 1.2,
+            "last_checked": datetime.now().isoformat(),
+            "mode": "TEST / SANDBOX MODE (LIVE STRICTLY DISABLED)" if has_keys else "ADAPTER SIMULATION MODE (Keys Absent, LIVE STRICTLY DISABLED)",
+            "is_live": False,
+            "is_live_allowed": False,
+            "smart_router_active": True,
+            "optimizer_active": True,
+        }

@@ -137,11 +137,62 @@ Enforces dual control for high-value financial actions:
 
 ---
 
-## 9. Rollback Engine (`app/recovery_agent.py`)
+---
 
-If an intervention causes adverse network side effects:
-- Operator triggers rollback with reason.
-- Reverts flipped transaction states back to failed.
-- Decrements simulated retry counts.
-- Transitions incident to `ROLLED_BACK`.
-- Logs `ROLLBACK_EXECUTED` in cryptographic audit trail.
+## 10. Production Architecture vs. Current Prototype 🌐
+
+DeclineDoctor is architected with a strict separation between what is active in the current prototype/demo environment and what constitutes the target enterprise production deployment:
+
+```
+                      [ PRODUCTION ARCHITECTURE ]
+
+  Razorpay Webhook / Kafka Payment Ingest Stream
+                       │
+                       ▼
+  Streaming Event Bus (Apache Kafka / AWS Kinesis)
+                       │ (Validates, Enriches with BIN/Bank metadata)
+                       ▼
+  Real-Time Feature Store & Evidence Aggregator
+  (Hourly rolling baselines, CUSUM, EWMA, failure-code concentration)
+                       │
+                       ▼
+  Statistical Anomaly Detection Pipeline
+  (CUSUM + EWMA + Z-score deviation triggers incident lifecycle)
+                       │
+                       ▼
+  Structured Evidence AI Diagnosis Subsystem
+  (Structured evidence synthesis, supporting & contradicting signals)
+                       │
+                       ▼
+  Authoritative Policy Gate (Deterministic Rules Engine)
+  (Confidence >= 70%, Revenue checks, Dual-control human approval, RBAC)
+                       │
+                       ▼
+  Smart Router & Provider Gateway Execution
+  (Direct Razorpay Optimizer API, multi-gateway weights, intelligent backoff)
+                       │
+                       ▼
+  Outcome Measurement & Cohort Telemetry
+  (Calculates actual lift, flips recovered volume, measures latency)
+                       │
+                       ▼
+  Closed-Loop Learning Loop
+  (Records RecoveryLearning, updates Bayesian prior effectiveness, tunes ranking)
+                       │
+                       ▼
+  Cryptographic Audit Chain & Production Observability
+  (SHA-256 tamper-evident chain, Prometheus alerts, P95 stage latencies)
+```
+
+### Direct Comparison: Current Prototype vs. Production Design
+
+| Component | Current Prototype (Verified) | Target Enterprise Production Design |
+|---|---|---|
+| **Payment Provider** | `MockPaymentProvider` (Deterministic sandbox) + `RazorpayPaymentProvider` (Test sandbox adapter with live mode strictly disabled) | Active Razorpay Smart Router & Optimizer APIs with redundant secondary PSP failovers |
+| **Event Pipeline** | In-memory 9-stage pipeline trace simulator with realistic timestamps | Distributed streaming pipeline (Kafka/Flink) ingesting millions of webhook events/sec |
+| **Financial Execution** | Bounded simulated transactions with retry ceilings ($\le 2$); real financial transactions strictly blocked | Direct gateway API dispatch with idempotency keys and merchant reconciliation |
+| **Diagnosis Engine** | Numeric-grounded LLM advisory with deterministic fallback rule engine | Hybrid LLM + fine-tuned edge classifier with automated prompt caching |
+| **Recovery Learning** | SQLite/PostgreSQL `recovery_learning` table tracking 38+ calibrated historical attempts | Distributed Bayesian bandit system updating dynamic gateway routing weights |
+| **Experimentation** | Deterministic synthetic cohort simulations (100 txns/cohort, z-test) | Multi-armed bandit testing across canary traffic splits with live holdouts |
+| **Audit Log** | Local SHA-256 parent-hash chained database table | Distributed immutable ledger (AWS QLDB or signed cloud storage WORM) |
+| **Customer Safety** | Anonymized `CUST_XXXX` cooldown and retry limits without PII storage | Tokenized customer vault with Redis-backed distributed cooldown tokens |
